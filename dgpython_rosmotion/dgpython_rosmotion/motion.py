@@ -1,5 +1,4 @@
 import sys
-import nidaqmx
 import spatialnde2 as snde
 import numpy as np
 import time
