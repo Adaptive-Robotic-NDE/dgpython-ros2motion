@@ -103,6 +103,7 @@ private:
         //result->sequence = sequence;
         result->success = false;
         goal_handle->canceled(result);
+	this->move_group_interface_->stop();
         RCLCPP_INFO(this->get_logger(), "Goal canceled");
         return;
     }
@@ -112,8 +113,9 @@ private:
 			status = this->move_group_interface_->execute(trajectory);
 		}
 		else {
-      result->success = false;
-      goal_handle->abort(result);
+ 			this->move_group_interface_->stop();
+		        result->success = false;
+			goal_handle->abort(result);
 			RCLCPP_ERROR(this->get_logger(), "Planning failed");
       return;      
 		}   
@@ -126,6 +128,7 @@ private:
       return;
     }
     else {
+      this->move_group_interface_->stop();
       result->success = false;
       goal_handle->abort(result);
       RCLCPP_ERROR(this->get_logger(), "Failed to reach goal, error code %d", status.val);
