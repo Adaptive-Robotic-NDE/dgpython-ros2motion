@@ -155,13 +155,13 @@ class motion(Node, metaclass=dgpy_Module):
     def WaitStopAcquisition(self):
         if self._thread is not None:
             self._quit = True
-            while self._thread.isAlive():
+            while self._thread.is_alive():
                 time.sleep(0.01)
                 pass
         return
 
     def WaitPauseAcquisition(self):
-        if self._thread is not None and self._thread.isAlive():
+        if self._thread is not None and self._thread.is_alive():
             self._pause = True
             while self._paused == False:
                 time.sleep(0.01)
@@ -169,7 +169,7 @@ class motion(Node, metaclass=dgpy_Module):
         return
 
     def WaitUnPauseAcquisition(self):
-        if self._thread is not None and self._thread.isAlive() and self._paused == True:
+        if self._thread is not None and self._thread.is_alive() and self._paused == True:
             self._pause = False
             while self._paused == True:
                 time.sleep(0.01)
@@ -179,7 +179,7 @@ class motion(Node, metaclass=dgpy_Module):
     def RestartAcquisition(self):
         if self._thread is not None:
             self._quit = True
-            while self._thread.isAlive():
+            while self._thread.is_alive():
                 time.sleep(0.01)
                 pass  
         
@@ -197,11 +197,13 @@ class motion(Node, metaclass=dgpy_Module):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
+        r = self.create_rate(30)
+
         while not self._quit:
             if self._pause == True:
                 self._paused = True
                 while self._pause == True:
-                    time.sleep(0.01)
+                    time.sleep(0.5)
                     pass
                 self._paused = False
 
@@ -213,10 +215,15 @@ class motion(Node, metaclass=dgpy_Module):
             except TransformException as ex:
                 self.get_logger().info(f'Could not transform {self.to_frame_rel} to {self.from_frame_rel}: {ex}')
 
+            r.sleep()
+
     def SpinnerThread(self):
         InitCompatibleThread(self, "_spinner")
+    
+        r = self.create_rate(30)
 
         while not self._quit:
             rclpy.spin(self)
+            r.sleep()
             #time.sleep(0.5)
 
