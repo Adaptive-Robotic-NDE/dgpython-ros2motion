@@ -23,7 +23,7 @@ def get_robot_description():
         [
             PathJoinSubstitution([FindExecutable(name="xacro")]),
             " ",
-            PathJoinSubstitution([FindPackageShare("ur_description"), "urdf", "ur.urdf.xacro"]),
+            PathJoinSubstitution([FindPackageShare("afrl_ur_launch"), "urdf", "ur_withenvironment.urdf.xacro"]),
             " ",
             "robot_ip:=172.17.0.2",
             " ",
@@ -55,7 +55,7 @@ def get_robot_description():
             "ur10e",
             " ",
             "prefix:=",
-            '""',
+            "",
             " ",
         ]
     )
@@ -70,7 +70,7 @@ def get_robot_description_semantic():
         [
             PathJoinSubstitution([FindExecutable(name="xacro")]),
             " ",
-            PathJoinSubstitution([FindPackageShare("ur_moveit_config"), "srdf", "ur.srdf.xacro"]),
+            PathJoinSubstitution([FindPackageShare("afrl_ur_launch"), "srdf", "ur.srdf.xacro"]),
             " ",
             "name:=",
             # Also ur_type parameter could be used but then the planning group names in yaml
@@ -78,7 +78,10 @@ def get_robot_description_semantic():
             "ur",
             " ",
             "prefix:=",
-            '""',
+            "",
+            " ",
+            "tooling:=",
+            "new",
             " ",
         ]
     )

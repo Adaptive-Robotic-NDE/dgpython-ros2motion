@@ -77,6 +77,8 @@ private:
     if (!this->move_group_interface_) {
 	this->move_group_interface_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur_manipulator");
 	this->move_group_interface_->setGoalTolerance(0.00005);
+	RCLCPP_INFO(this->get_logger(), "Planning Frame: %s", this->move_group_interface_->getPlanningFrame().c_str());
+	RCLCPP_INFO(this->get_logger(), "End Effector Link: %s", this->move_group_interface_->getEndEffectorLink().c_str());
     }
 
     auto const target_pose = [](geometry_msgs::msg::Pose msg){
