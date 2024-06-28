@@ -19,12 +19,13 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import PoseArray, Pose
 from threading import RLock
 from typing import Any
 from rclpy.task import Future
 
 ur = pint.get_application_registry()
+orient_dtype = [('offset', '<f4', (4,)), ('quat', '<f4', (4,))]
 
 
 class ParamAttribute(object):
@@ -93,16 +94,43 @@ class motion(Node, metaclass=dgpy_Module):
     #'AcquisitionType': ('Specifies continuous or finite sampling -- Valid options are "CONTINUOUS" or "FINITE"', const.AcquisitionType.FINITE, lambda val: {"CONTINUOUS": const.AcquisitionType.CONTINUOUS, "FINITE": const.AcquisitionType.FINITE}[val], lambda val: {const.AcquisitionType.CONTINUOUS: 'CONTINUOUS', const.AcquisitionType.FINITE: 'FINITE'}[val], lambda val: {const.AcquisitionType.CONTINUOUS: 'CONTINUOUS', const.AcquisitionType.FINITE: 'FINITE'}[val], lambda val: snde.metadatum('daq_params-AcquisitionType', val)),
     #'SampsPerChan': ('Number of Data Points Per Channel', 100, lambda val: val, lambda val: val, lambda val: val, lambda val: snde.metadatum('daq_params-SampsPerChan', val))}
 
-    def __init__(self, module_name, from_frame_rel, to_frame_rel, **kwargs):
+    def __init__(self, module_name, recdb, from_frame_rel, to_frame_rel, eoat_mesh=None, **kwargs):
         super().__init__('dataguzzler_frame_publisher')
+        self.get_logger().info("Dataguzzler Frame Publisher Module Starting")
         self.module_name = module_name
         self._params = {}
         self.from_frame_rel = from_frame_rel
         self.to_frame_rel = to_frame_rel
         self.t = None
         self.desired_t = None
-        self._action_client = PatchRclpyIssue1123(self, DgPython, 'dgpython') 
+        self.recdb = recdb
+
+        if eoat_mesh is not None:
+            self.eoat_model_file = eoat_mesh
+            self.graphman = snde.graphics_storage_manager("/graphics/", self.recdb.lowlevel_alloc, self.recdb.alignment_requirements,self.recdb.lockmgr, 1e-8, 2000000000)
+            self.eoat_model_tree = '/graphics/probe/'
+            self.eoat_pose_channel = '/probe_pose'
+            transact = self.recdb.start_transaction()
+            self.graphicsgroup = self.recdb.define_channel('/graphics/', 'main', self.recdb.raw(), False, self.graphman)
+            self.eoat_recording = snde.x3d_load_geometry(self.recdb, self.graphman, self.eoat_model_file, 0, 'main', self.recdb.raw(), self.eoat_model_tree, None, ['reindex_vertices', 'reindex_tex_vertices'])
+            self.eoat_pose_chan = self.recdb.define_channel(self.eoat_pose_channel, "main", self.recdb.raw())
+            self._NewEOATPositionInTransaction(snde.snde_invalid_orientation3())
+            transact.end_transaction()
+
+            
+        else:
+            self.eoat_mesh = None
+
+
+        self._action_client = PatchRclpyIssue1123(self, DgPython, 'dgpython')
         #self.broadcaster = self.create_publisher(Pose, "/dataguzzler_frame_publisher", 100)
+
+#        self.pose_array_subscriber = self.create_subscription(
+#            PoseArray,
+#            '/downsampled_pose_array',
+#            self.pose_array_callback,
+#            10)
+
 
         for param in self._paramdict:
             self._params[param] = self._paramdict[param][1]
@@ -112,6 +140,14 @@ class motion(Node, metaclass=dgpy_Module):
 
         # For now, we'll run our own thread to query ROS -- not sure how threading works in the create_subscription method
         self.RestartAcquisition()
+
+    def _NewEOATPositionInTransaction(self, orientation):
+        eoat_pose_ref = snde.create_pose_channel_ndarray_ref(self.recdb, self.eoat_pose_chan, self.recdb.raw(), snde.recdb_path_join(self.eoat_model_tree, "meshed"))
+        eoat_pose_ref.allocate_storage([1])
+        eoat_pose_rec = snde.pose_channel_recording.from_ndarray_recording(eoat_pose_ref.rec)
+        eoat_pose_ref.data()[0] = orientation
+        eoat_pose_ref.rec.mark_metadata_done()
+        eoat_pose_ref.rec.mark_data_ready()
 
     def Move(self, msg):
         t = Pose()
@@ -133,6 +169,26 @@ class motion(Node, metaclass=dgpy_Module):
         self._action_client.wait_for_server()
 
         return self._action_client.send_goal(goal_msg)
+    
+#    def pose_array_callback(self, msg):
+#        
+#        self.get_logger().info("Received pose array")
+#        
+#        self.get_logger().info("First pose in PoseArray:")
+#        
+#        self.get_logger().info("Position: (%.3f, %.3f, %.3f)", msg.poses[0].position.x, msg.poses[0].position.y, msg.poses[0].position.z)
+#        
+#        self.get_logger().info("Orientation: (%.3f, %.3f, %.3f, %.3f)", msg.poses[0].orientation.x, msg.poses[0].orientation.y, msg.poses[0].orientation.z, msg.poses[0].orientation.w)
+#        
+#        for pose in msg.poses:
+#            
+#            self.desired_pose = pose
+#
+#            goal_msg = DgPython.Goal()
+#            goal_msg.destination = self.desired_pose
+#
+#            self._action_client.wait_for_server()
+#            self._action_client.send_goal(goal_msg)
 
     def _GetParam(self, name):
         return self._paramdict[name][3](self._params[name])
@@ -212,6 +268,16 @@ class motion(Node, metaclass=dgpy_Module):
                         self.to_frame_rel,
                         self.from_frame_rel,
                         rclpy.time.Time())
+                transact = self.recdb.start_transaction()
+                self._NewEOATPositionInTransaction(np.array(((self.t.transform.translation.x,
+                                                              self.t.transform.translation.y,
+                                                              self.t.transform.translation.z,
+                                                              0),(
+                                                              self.t.transform.rotation.x, 
+                                                              self.t.transform.rotation.y, 
+                                                              self.t.transform.rotation.z, 
+                                                              self.t.transform.rotation.w)),dtype=orient_dtype))
+                transact.end_transaction()
             except TransformException as ex:
                 self.get_logger().info(f'Could not transform {self.to_frame_rel} to {self.from_frame_rel}: {ex}')
 
