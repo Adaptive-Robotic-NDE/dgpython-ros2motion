@@ -71,6 +71,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'demos'), glob('demos/*.*')),
+        (os.path.join('lib','python3.10','site-packages', package_name), glob('dgpython_rosmotion/*.dpi'))
     ],
     install_requires=['setuptools'],
     zip_safe=False,

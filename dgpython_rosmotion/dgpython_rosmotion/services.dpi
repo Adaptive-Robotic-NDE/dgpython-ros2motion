@@ -1,0 +1,36 @@
+
+from tari_interfaces.srv import TariNoether
+from tari_interfaces.srv import TariMeshFilter
+from tari_interfaces.action import PoseArrayHandler
+from industrial_reconstruction_msgs.srv import StartReconstruction, StopReconstruction
+
+
+# ros  = None
+
+global noether_client, start_reconstruction, stop_reconstruction, motion_client, mesh_filter_client
+
+noether_client = ros.clientCreation(False, TariNoether, 'tari_noether')
+noether_client.registerInterface('TariNoether', TariNoether)
+
+start_reconstruction = ros.clientCreation(False, StartReconstruction, 'start_reconstruction')
+start_reconstruction.registerInterface('StartReconstruction', StartReconstruction)
+
+stop_reconstruction = ros.clientCreation(False, StopReconstruction, 'stop_reconstruction')
+stop_reconstruction.registerInterface('StopReconstruction', StopReconstruction)
+
+mesh_filter_client = ros.clientCreation(False, TariMeshFilter, 'tari_mesh_filter')
+mesh_filter_client.registerInterface('TariMeshFilter', TariMeshFilter)
+
+motion_client = ros.clientCreation(True, PoseArrayHandler, 'pose_array_action')
+motion_client.registerInterface('PoseArrayHandler', PoseArrayHandler)
+
+# include(dgpython_rosmotion, 'services.dpi')
+
+# noether_client.sendRequest('TariNoether', {'mesh_filename': 'FileName.ply', 'line_spacing': 0.005, 'point_spacing': 0.005 })
+
+# start_reconstruction.registerMessage('RGBDImageParams', {'depth_scale':depth_scale,'depth_trunc':depth_trunc, 'convert_rgb_to_intensity':convert_rgb_to_intensity})
+# start_reconstruction.registerMessage('TSDFVolumeParams', {'voxel_length':voxel_length,'sdf_trunc':sdf_trunc, 'min_box_values':min_box_values, 'max_box_values':max_box_values})
+# start_reconstruction.sendRequest('StartReconstruction', {'tracking_frame':tracking_frame, 'relative_frame':relative_frame, 'translation_distance':translation_distance, 'rotational_distance':rotational_distance, 'live':live})
+
+# stop_reconstruction.registerMessage('NormalFilterParams', {'normal_direction':normal_direction,'angle':angle})
+# stop_reconstruction.sendRequest('StopReconstruction', {'archive_directory':archive_directory, 'mesh_filepath':mesh_filepath})

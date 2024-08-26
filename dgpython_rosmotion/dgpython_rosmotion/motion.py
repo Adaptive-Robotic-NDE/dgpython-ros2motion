@@ -78,6 +78,10 @@ from geometry_msgs.msg import PoseArray, Pose
 from threading import RLock
 from typing import Any
 from rclpy.task import Future
+from tari_interfaces.action import PoseArrayHandler
+from tari_interfaces.srv import TariNoether
+from industrial_reconstruction_msgs.srv import StartReconstruction, StopReconstruction
+from industrial_reconstruction_msgs.msg import NormalFilterParams, RGBDImageParams, TSDFVolumeParams
 
 ur = pint.get_application_registry()
 orient_dtype = [('offset', '<f4', (4,)), ('quat', '<f4', (4,))]
@@ -133,6 +137,37 @@ class PatchRclpyIssue1123(ActionClient):
     def _get_result_async(self, *args: Any, **kwargs: Any) -> Future:
         with self._cpp_client_handle_lock:
             return super()._get_result_async(*args, **kwargs)
+
+class client(object):
+    def __init__(self, client, serviceType, serverName):
+        self.serviceType = serviceType
+        self.serverName = serverName
+        self.client = client
+        self.interfaces = {}
+
+    def registerInterface(self, interfacename, interface):
+        self.interfaces[interfacename] = interface
+
+    def sendGoal(self, interface, options):
+        goal_msg = self.interfaces[interface].Goal()
+        for key in options:
+            setattr(goal_msg, key, options[key])
+            print(f"Setting {key} to {options[key]}")
+        self.client.wait_for_server()
+        future = self.client.send_goal_async(goal_msg)
+        while not future.done():
+            time.sleep(0.01)
+        return future.result()
+
+    def sendRequest(self, interface, options):
+        req = self.interfaces[interface].Request()
+        for key in options:
+            setattr(req, key, options[key])
+            print(f"Setting {key} to {options[key]}")
+        future = self.client.call_async(req)
+        while not future.done():
+            time.sleep(0.01)
+        return future.result()
 
 
 @add_parameters
@@ -194,7 +229,39 @@ class motion(Node, metaclass=dgpy_Module):
             self._params[param] = self._paramdict[param][2](kwargs[param])
 
         # For now, we'll run our own thread to query ROS -- not sure how threading works in the create_subscription method
+        self._spinner = Thread(target=self.SpinnerThread, daemon=True)
+        self._spinner.start()
         self.RestartAcquisition()
+        # self.tari_noether_client()
+    def specimenMesh(self,specimen_mesh=None):
+        if specimen_mesh is not None:
+            self.specimen_model_file = specimen_mesh
+            self.get_logger().info("1")
+            self.specimen_model_tree = '/graphics/specimen/'
+            self.get_logger().info("2")
+            self.specimen_pose_channel = '/specimen_pose'
+            self.get_logger().info("3")
+            try:
+                transact = self.recdb.start_transaction()
+                self.get_logger().info("4")
+                self.specimen_recording = snde.x3d_load_geometry(self.recdb, self.graphman, self.specimen_model_file, 0, 'main', self.recdb.raw(), self.specimen_model_tree, None, ['reindex_vertices', 'reindex_tex_vertices'])
+                self.get_logger().info("5")
+                self.specimen_pose_chan = self.recdb.define_channel(self.specimen_pose_channel, "main", self.recdb.raw())
+                self.get_logger().info("6")
+                self._NewEOATPositionInTransaction(snde.snde_invalid_orientation3())
+                self.get_logger().info("7")
+            finally:
+                transact.end_transaction()
+
+        else:
+            self.specimen_mesh = None
+    def _NewSpecimenPositionInTransaction(self, orientation):
+        specimen_pose_ref = snde.create_pose_channel_ndarray_ref(self.recdb, self.specimen_pose_chan, self.recdb.raw(), snde.recdb_path_join(self.specimen_model_tree, "meshed"))
+        specimen_pose_ref.allocate_storage([1])
+        specimen_pose_rec = snde.pose_channel_recording.from_ndarray_recording(specimen_pose_ref.rec)
+        specimen_pose_ref.data()[0] = orientation
+        specimen_pose_ref.rec.mark_metadata_done()
+        specimen_pose_ref.rec.mark_data_ready()
 
     def _NewEOATPositionInTransaction(self, orientation):
         eoat_pose_ref = snde.create_pose_channel_ndarray_ref(self.recdb, self.eoat_pose_chan, self.recdb.raw(), snde.recdb_path_join(self.eoat_model_tree, "meshed"))
@@ -299,8 +366,8 @@ class motion(Node, metaclass=dgpy_Module):
         self._paused = False
         self._thread = Thread(target=self.AcquisitionThread, daemon=True)
         self._thread.start()
-        self._spinner = Thread(target=self.SpinnerThread, daemon=True)
-        self._spinner.start()
+ 
+
     
     def AcquisitionThread(self):
         InitCompatibleThread(self, "_thread")
@@ -338,6 +405,20 @@ class motion(Node, metaclass=dgpy_Module):
 
             r.sleep()
 
+    
+    # clientCreation(StartReconstruction, "start_reconstruction", TariReconstruction)
+
+    def clientCreation(self, action, serviceType, serviceName):
+        if action:
+            cli = ActionClient(self, serviceType, serviceName)
+        else:
+            cli = self.create_client(serviceType, serviceName)
+            while not cli.wait_for_service(timeout_sec=1.0):
+                self.get_logger().info(f'{serviceName} service not available, waiting again...')
+
+        ret = client(cli, serviceType, serviceName)        
+        
+        return ret
     def SpinnerThread(self):
         InitCompatibleThread(self, "_spinner")
     
