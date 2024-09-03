@@ -271,7 +271,7 @@ class motion(Node, metaclass=dgpy_Module):
         eoat_pose_ref.rec.mark_metadata_done()
         eoat_pose_ref.rec.mark_data_ready()
 
-    def Move(self, msg):
+    def MoveToPose(self, msg):
         t = Pose()
 
         t.position.x = msg.transform.translation.x
@@ -311,6 +311,12 @@ class motion(Node, metaclass=dgpy_Module):
 #
 #            self._action_client.wait_for_server()
 #            self._action_client.send_goal(goal_msg)
+
+    def MoveToGoalState(self, state):
+        goal_msg = DgPython.Goal()
+        goal_msg.state = state
+        self._action_client.wait_for_server()
+        return self._action_client.send_goal(goal_msg)
 
     def _GetParam(self, name):
         return self._paramdict[name][3](self._params[name])

@@ -106,7 +106,17 @@ private:
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const DgPython::Goal> goal)
   {
-    RCLCPP_INFO(this->get_logger(), "Received goal request with destination (%f, %f, %f)", goal->destination.position.x, goal->destination.position.y, goal->destination.position.z);
+    if(!goal->state.empty())
+    {
+      RCLCPP_INFO(this->get_logger(), "Received goal request with state (%s)", goal->state);
+      (void)uuid;
+      return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
+    else
+    {
+      RCLCPP_INFO(this->get_logger(), "Received goal request with destination (%f, %f, %f)", goal->destination.position.x, goal->destination.position.y, goal->destination.position.z);
+    }
+    
     (void)uuid;
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
   }
@@ -138,61 +148,82 @@ private:
 	RCLCPP_INFO(this->get_logger(), "Planning Frame: %s", this->move_group_interface_->getPlanningFrame().c_str());
 	RCLCPP_INFO(this->get_logger(), "End Effector Link: %s", this->move_group_interface_->getEndEffectorLink().c_str());
     }
+    if(!goal->state.empty()){
+        moveit::planning_interface::MoveGroupInterface::Plan my_plan;
+        std::string target_name = goal->state;
+        move_group_interface_->setNamedTarget(target_name);
+        bool success = (move_group_interface_->plan(my_plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+        if (success) {
+            move_group_interface_->execute(my_plan);
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Planning failed for named target: %s", target_name.c_str());
+        }
 
-    auto const target_pose = [](geometry_msgs::msg::Pose msg){
-  	    			geometry_msgs::msg::Pose out;
-	 			out.orientation.w = msg.orientation.w;
-				out.orientation.x = msg.orientation.x;
-				out.orientation.y = msg.orientation.y;
-				out.orientation.z = msg.orientation.z;
-				out.position.x = msg.position.x;
-				out.position.y = msg.position.y;
-				out.position.z = msg.position.z;
-				return out;
-				}(goal->destination);
+        if (rclcpp::ok()) {
+            // feedback->progress = 1.0;
+            result->success = true;
+            goal_handle->succeed(result);
+            RCLCPP_INFO(this->get_logger(), "Goal executed successfully");
+            return;
+        }
+    }
+    else{
+      auto const target_pose = [](geometry_msgs::msg::Pose msg){
+    	    			geometry_msgs::msg::Pose out;
+  	 			out.orientation.w = msg.orientation.w;
+  				out.orientation.x = msg.orientation.x;
+  				out.orientation.y = msg.orientation.y;
+  				out.orientation.z = msg.orientation.z;
+  				out.position.x = msg.position.x;
+  				out.position.y = msg.position.y;
+  				out.position.z = msg.position.z;
+  				return out;
+  				}(goal->destination);
 
-    std::vector<geometry_msgs::msg::Pose> waypoints;
-    waypoints.push_back(target_pose);
+      std::vector<geometry_msgs::msg::Pose> waypoints;
+      waypoints.push_back(target_pose);
 
-    moveit_msgs::msg::RobotTrajectory trajectory;
-    const double jump_threshold = 0.0;
-    const double eef_step = 0.01;
-    double fraction = this->move_group_interface_->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
+      moveit_msgs::msg::RobotTrajectory trajectory;
+      const double jump_threshold = 0.0;
+      const double eef_step = 0.01;
+      double fraction = this->move_group_interface_->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
 
-    if (goal_handle->is_canceling()) {
-        //result->sequence = sequence;
-        result->success = false;
-        goal_handle->canceled(result);
-	this->move_group_interface_->stop();
-        RCLCPP_INFO(this->get_logger(), "Goal canceled");
+      if (goal_handle->is_canceling()) {
+          //result->sequence = sequence;
+          result->success = false;
+          goal_handle->canceled(result);
+  	      this->move_group_interface_->stop();
+          RCLCPP_INFO(this->get_logger(), "Goal canceled");
+          return;
+      }
+
+      moveit::core::MoveItErrorCode status;
+      if(fraction > 0 && (fraction - 1.0) <= std::numeric_limits<double>::epsilon() && rclcpp::ok()) {
+  			status = this->move_group_interface_->execute(trajectory);
+  		}
+  		else {
+   			this->move_group_interface_->stop();
+  		        result->success = false;
+  			goal_handle->abort(result);
+  			RCLCPP_ERROR(this->get_logger(), "Planning failed");
+        return;      
+  		}   
+
+      // Check if goal is done
+      if (rclcpp::ok() && status.val == moveit::core::MoveItErrorCode::SUCCESS) {
+        result->success = true;
+        goal_handle->succeed(result);
+        RCLCPP_INFO(this->get_logger(), "Goal succeeded");
         return;
-    }
+      }
+      else {
+        this->move_group_interface_->stop();
+        result->success = false;
+        goal_handle->abort(result);
+        RCLCPP_ERROR(this->get_logger(), "Failed to reach goal, error code %d", status.val);
+        return;
+      }
 
-    moveit::core::MoveItErrorCode status;
-    if(fraction > 0 && (fraction - 1.0) <= std::numeric_limits<double>::epsilon() && rclcpp::ok()) {
-			status = this->move_group_interface_->execute(trajectory);
-		}
-		else {
- 			this->move_group_interface_->stop();
-		        result->success = false;
-			goal_handle->abort(result);
-			RCLCPP_ERROR(this->get_logger(), "Planning failed");
-      return;      
-		}   
-
-    // Check if goal is done
-    if (rclcpp::ok() && status.val == moveit::core::MoveItErrorCode::SUCCESS) {
-      result->success = true;
-      goal_handle->succeed(result);
-      RCLCPP_INFO(this->get_logger(), "Goal succeeded");
-      return;
-    }
-    else {
-      this->move_group_interface_->stop();
-      result->success = false;
-      goal_handle->abort(result);
-      RCLCPP_ERROR(this->get_logger(), "Failed to reach goal, error code %d", status.val);
-      return;
     }
   }
 };  // class DgPythonActionServer

@@ -57,8 +57,10 @@
 
 # Request
 geometry_msgs/Pose destination
+string state
 ---
 # Result
 bool success
 ---
 # Feedback
+float32 progress

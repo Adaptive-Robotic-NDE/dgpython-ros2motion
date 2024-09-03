@@ -1,6 +1,6 @@
 #########################################################################
 # AdaptiveNDE Project                                                   #
-# AFRL-ROS Package                                                      # 
+# tari-ROS Package                                                      # 
 #########################################################################
 # Copyright 2023-2024 University of Dayton                              #
 #                                                                       #
@@ -92,15 +92,22 @@ import os
 import sys
 
 from launch_ros.actions import Node
-from launch.substitutions import PathJoinSubstitution, Command, FindExecutable
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import PathJoinSubstitution, Command, FindExecutable, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
 
 def get_robot_description():
+
+    launch_d415 = LaunchConfiguration("launch_d415")
+    launch_azure = LaunchConfiguration("launch_azure")
+    launch_keyence = LaunchConfiguration("launch_keyence")
+    tooling = LaunchConfiguration("tooling")
+
     joint_limit_params = PathJoinSubstitution(
         [FindPackageShare("ur_description"), "config", "ur10e", "joint_limits.yaml"]
     )
     kinematics_params = PathJoinSubstitution(
-        [FindPackageShare("afrl_ur_launch"), "etc", "", "ex-ur10e-1_calibration.yaml"]
+        [FindPackageShare("tari_ur_launch"), "etc", "", "ex-ur10e-1_calibration.yaml"]
     )
     physical_params = PathJoinSubstitution(
         [FindPackageShare("ur_description"), "config", "ur10e", "physical_parameters.yaml"]
@@ -112,7 +119,7 @@ def get_robot_description():
         [
             PathJoinSubstitution([FindExecutable(name="xacro")]),
             " ",
-            PathJoinSubstitution([FindPackageShare("afrl_ur_launch"), "urdf", "ur_withenvironment.urdf.xacro"]),
+            PathJoinSubstitution([FindPackageShare("tari_ur_launch"), "urdf", "ur_withenvironment.urdf.xacro"]),
             " ",
             "robot_ip:=172.17.0.2",
             " ",
@@ -146,6 +153,18 @@ def get_robot_description():
             "prefix:=",
             "",
             " ",
+            "tooling:=",
+            tooling,
+            " ",
+            "launch_d415:=",
+            launch_d415,
+            " ",
+            "launch_azure:=",
+            launch_azure,
+            " ",
+            "launch_keyence:=",
+            launch_keyence,
+            " ",
         ]
     )
 
@@ -159,7 +178,7 @@ def get_robot_description_semantic():
         [
             PathJoinSubstitution([FindExecutable(name="xacro")]),
             " ",
-            PathJoinSubstitution([FindPackageShare("afrl_ur_launch"), "srdf", "ur.srdf.xacro"]),
+            PathJoinSubstitution([FindPackageShare("tari_ur_launch"), "srdf", "ur.srdf.xacro"]),
             " ",
             "name:=",
             # Also ur_type parameter could be used but then the planning group names in yaml
@@ -194,5 +213,35 @@ def generate_launch_description():
         ],
         #prefix=['xterm -e gdb -ex run --args']
     )
+    declared_arguments = []
 
-    return launch.LaunchDescription([demo_node])
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "launch_d415",
+            default_value="true",
+            description="Launch realsense D415 camera",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "launch_azure",
+            default_value="false",
+            description="Launch realsense Azure Kinect camera",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "launch_keyence",
+            default_value="false",
+            description="Launch realsense Keyence laser profiler",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument("tooling",
+                              default_value="new",
+                              description="End of Arm Tooling Choice (old/new)",
+                              choices=["old", "new"])
+    )
+
+
+    return launch.LaunchDescription(declared_arguments + [demo_node])
