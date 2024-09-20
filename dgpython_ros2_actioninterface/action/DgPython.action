@@ -57,6 +57,9 @@
 
 # Request
 geometry_msgs/Pose destination
+geometry_msgs/PoseArray pose_array
+float32 velocity
+float32 acceleration
 string state
 ---
 # Result
