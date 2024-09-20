@@ -112,9 +112,18 @@ private:
       (void)uuid;
       return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
-    else
+    else if(!goal->pose_array.poses.empty())
+    {
+      RCLCPP_INFO(this->get_logger(), "Received goal request received pose array with %d poses", goal->pose_array.poses.size());
+    }
+    else if(goal->destination != nullptr)
     {
       RCLCPP_INFO(this->get_logger(), "Received goal request with destination (%f, %f, %f)", goal->destination.position.x, goal->destination.position.y, goal->destination.position.z);
+    }
+    else
+    {
+      RCLCPP_INFO(this->get_logger(), "Received goal request with no goal");
+      return rclcpp_action::GoalResponse::REJECT;
     }
     
     (void)uuid;
@@ -143,11 +152,14 @@ private:
     auto result = std::make_shared<DgPython::Result>();
 
     if (!this->move_group_interface_) {
-	this->move_group_interface_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur_manipulator");
-	this->move_group_interface_->setGoalTolerance(0.00005);
-	RCLCPP_INFO(this->get_logger(), "Planning Frame: %s", this->move_group_interface_->getPlanningFrame().c_str());
-	RCLCPP_INFO(this->get_logger(), "End Effector Link: %s", this->move_group_interface_->getEndEffectorLink().c_str());
+    	this->move_group_interface_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur_manipulator");
+    	this->move_group_interface_->setGoalTolerance(0.00005);
+    	RCLCPP_INFO(this->get_logger(), "Planning Frame: %s", this->move_group_interface_->getPlanningFrame().c_str());
+    	RCLCPP_INFO(this->get_logger(), "End Effector Link: %s", this->move_group_interface_->getEndEffectorLink().c_str());
     }
+    move_group_interface_->setMaxVelocityScalingFactor(goal->velocity);
+    move_group_interface_->setMaxAccelerationScalingFactor(goal->acceleration);
+    move_group_interface_->setPlanningTime(10.0);
     if(!goal->state.empty()){
         moveit::planning_interface::MoveGroupInterface::Plan my_plan;
         std::string target_name = goal->state;
@@ -167,7 +179,56 @@ private:
             return;
         }
     }
-    else{
+    else if(!goal->pose_array.poses.empty()){
+
+      std::vector<geometry_msgs::msg::Pose> waypoints;
+      for (const auto& pose : goal->pose_array.poses) {
+            waypoints.push_back(pose);
+        }
+      RCLCPP_INFO(this->get_logger(), "Received %zu waypoints", waypoints.size());
+      moveit_msgs::msg::RobotTrajectory trajectory;
+      const double jump_threshold = 0.0;
+      const double eef_step = 0.01;
+      double fraction = this->move_group_interface_->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
+
+      if (goal_handle->is_canceling()) {
+          //result->sequence = sequence;
+          result->success = false;
+          goal_handle->canceled(result);
+  	      this->move_group_interface_->stop();
+          RCLCPP_INFO(this->get_logger(), "Goal canceled");
+          return;
+      }
+
+      moveit::core::MoveItErrorCode status;
+      if(fraction > 0 && (fraction - 1.0) <= std::numeric_limits<double>::epsilon() && rclcpp::ok()) {
+  			status = this->move_group_interface_->execute(trajectory);
+  		}
+  		else {
+   			this->move_group_interface_->stop();
+  		        result->success = false;
+  			goal_handle->abort(result);
+  			RCLCPP_ERROR(this->get_logger(), "Planning failed");
+        return;      
+  		}   
+
+      // Check if goal is done
+      if (rclcpp::ok() && status.val == moveit::core::MoveItErrorCode::SUCCESS) {
+        result->success = true;
+        goal_handle->succeed(result);
+        RCLCPP_INFO(this->get_logger(), "Goal succeeded");
+        return;
+      }
+      else {
+        this->move_group_interface_->stop();
+        result->success = false;
+        goal_handle->abort(result);
+        RCLCPP_ERROR(this->get_logger(), "Failed to reach goal, error code %d", status.val);
+        return;
+      }
+    }
+    else if(goal->destination != nullptr)
+    {
       auto const target_pose = [](geometry_msgs::msg::Pose msg){
     	    			geometry_msgs::msg::Pose out;
   	 			out.orientation.w = msg.orientation.w;
@@ -224,6 +285,13 @@ private:
         return;
       }
 
+    }
+    else
+    {
+      RCLCPP_ERROR(this->get_logger(), "Invalid goal");
+      result->success = false;
+      goal_handle->abort(result);
+      return;
     }
   }
 };  // class DgPythonActionServer
