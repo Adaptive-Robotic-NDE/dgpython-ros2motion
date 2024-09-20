@@ -61,11 +61,14 @@ import time
 import pint
 import copy
 import typing
+import transforms3d
+import math
 from threading import Thread
 import traceback
 from dataguzzler_python.dgpy import Module as dgpy_Module
 from dataguzzler_python.dgpy import InitCompatibleThread
 import rclpy
+import rclpy.logging
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from dgpython_ros2_actioninterface.action import DgPython
@@ -74,7 +77,7 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
-from geometry_msgs.msg import PoseArray, Pose
+from geometry_msgs.msg import PoseArray, Pose, Quaternion, TransformStamped
 from threading import RLock
 from typing import Any
 from rclpy.task import Future
@@ -170,6 +173,8 @@ class client(object):
         return future.result()
 
 
+
+
 @add_parameters
 class motion(Node, metaclass=dgpy_Module):
     module_name : typing.ClassVar[str] = None
@@ -187,11 +192,15 @@ class motion(Node, metaclass=dgpy_Module):
     def __init__(self, module_name, recdb, from_frame_rel, to_frame_rel, eoat_mesh=None, **kwargs):
         super().__init__('dataguzzler_frame_publisher')
         self.get_logger().info("Dataguzzler Frame Publisher Module Starting")
+        self.pose_pub = self.create_publisher(PoseArray, 'pose_array', 10)
+        self.recon_pose_pub = self.create_publisher(PoseArray, 'recon_pose_array', 10)
+        self.pose_array = PoseArray()
+        self.pose_array.header.frame_id = to_frame_rel
         self.module_name = module_name
         self._params = {}
         self.from_frame_rel = from_frame_rel
         self.to_frame_rel = to_frame_rel
-        self.t = None
+        self.t = Pose()
         self.desired_t = None
         self.recdb = recdb
 
@@ -236,20 +245,13 @@ class motion(Node, metaclass=dgpy_Module):
     def specimenMesh(self,specimen_mesh=None):
         if specimen_mesh is not None:
             self.specimen_model_file = specimen_mesh
-            self.get_logger().info("1")
             self.specimen_model_tree = '/graphics/specimen/'
-            self.get_logger().info("2")
             self.specimen_pose_channel = '/specimen_pose'
-            self.get_logger().info("3")
             try:
                 transact = self.recdb.start_transaction()
-                self.get_logger().info("4")
                 self.specimen_recording = snde.x3d_load_geometry(self.recdb, self.graphman, self.specimen_model_file, 0, 'main', self.recdb.raw(), self.specimen_model_tree, None, ['reindex_vertices', 'reindex_tex_vertices'])
-                self.get_logger().info("5")
                 self.specimen_pose_chan = self.recdb.define_channel(self.specimen_pose_channel, "main", self.recdb.raw())
-                self.get_logger().info("6")
                 self._NewEOATPositionInTransaction(snde.snde_invalid_orientation3())
-                self.get_logger().info("7")
             finally:
                 transact.end_transaction()
 
@@ -271,27 +273,51 @@ class motion(Node, metaclass=dgpy_Module):
         eoat_pose_ref.rec.mark_metadata_done()
         eoat_pose_ref.rec.mark_data_ready()
 
-    def MoveToPose(self, msg):
-        t = Pose()
-
-        t.position.x = msg.transform.translation.x
-        t.position.y = msg.transform.translation.y
-        t.position.z = msg.transform.translation.z
-
-        t.orientation.x = msg.transform.rotation.x
-        t.orientation.y = msg.transform.rotation.y
-        t.orientation.z = msg.transform.rotation.z
-        t.orientation.w = msg.transform.rotation.w
-
-        self.desired_t = t
+    def Move(self, msg, vel, acc):
 
         goal_msg = DgPython.Goal()
-        goal_msg.destination = self.desired_t
+        
+        goal_msg.velocity = vel
+        goal_msg.acceleration = acc
+
+        if isinstance(msg, type(Pose())):
+            goal_msg.destination = msg
+        
+        elif isinstance(msg, type(PoseArray())):
+            # goal_msg.waypoints = msg
+            goal_msg.pose_array = msg
+
+        elif isinstance(msg, type(TransformStamped())):
+            t = Pose()
+
+            t.position.x = msg.transform.translation.x
+            t.position.y = msg.transform.translation.y
+            t.position.z = msg.transform.translation.z
+
+            t.orientation.x = msg.transform.rotation.x
+            t.orientation.y = msg.transform.rotation.y
+            t.orientation.z = msg.transform.rotation.z
+            t.orientation.w = msg.transform.rotation.w
+
+            self.desired_t = t
+            
+            goal_msg.destination = self.desired_t
+        elif isinstance(msg, list):
+            goal_msg.pose_array.poses = msg
+            goal_msg.pose_array.header.frame_id = "world"
+            self.pose_pub.publish(goal_msg.pose_array)
+
+        elif isinstance(msg, str):
+
+            goal_msg.state = msg
+
+        else:
+            return 'Invalid variable type: ', msg.__class__
 
         self._action_client.wait_for_server()
-
         return self._action_client.send_goal(goal_msg)
     
+
 #    def pose_array_callback(self, msg):
 #        
 #        self.get_logger().info("Received pose array")
@@ -311,12 +337,6 @@ class motion(Node, metaclass=dgpy_Module):
 #
 #            self._action_client.wait_for_server()
 #            self._action_client.send_goal(goal_msg)
-
-    def MoveToGoalState(self, state):
-        goal_msg = DgPython.Goal()
-        goal_msg.state = state
-        self._action_client.wait_for_server()
-        return self._action_client.send_goal(goal_msg)
 
     def _GetParam(self, name):
         return self._paramdict[name][3](self._params[name])
@@ -378,6 +398,8 @@ class motion(Node, metaclass=dgpy_Module):
     def AcquisitionThread(self):
         InitCompatibleThread(self, "_thread")
 
+        transform = TransformStamped()
+
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
@@ -392,19 +414,21 @@ class motion(Node, metaclass=dgpy_Module):
                 self._paused = False
 
             try:
-                self.t = self._tf_buffer.lookup_transform(
+                transform = self._tf_buffer.lookup_transform(
                         self.to_frame_rel,
                         self.from_frame_rel,
                         rclpy.time.Time())
+                self.t.position = transform.transform.translation
+                self.t.orientation = transform.transform.rotation
                 transact = self.recdb.start_transaction()
-                self._NewEOATPositionInTransaction(np.array(((self.t.transform.translation.x,
-                                                              self.t.transform.translation.y,
-                                                              self.t.transform.translation.z,
+                self._NewEOATPositionInTransaction(np.array(((transform.transform.translation.x,
+                                                              transform.transform.translation.y,
+                                                              transform.transform.translation.z,
                                                               0),(
-                                                              self.t.transform.rotation.x, 
-                                                              self.t.transform.rotation.y, 
-                                                              self.t.transform.rotation.z, 
-                                                              self.t.transform.rotation.w)),dtype=orient_dtype))
+                                                              transform.transform.rotation.x, 
+                                                              transform.transform.rotation.y, 
+                                                              transform.transform.rotation.z, 
+                                                              transform.transform.rotation.w)),dtype=orient_dtype))
                 transact.end_transaction()
             except TransformException as ex:
                 self.get_logger().info(f'Could not transform {self.to_frame_rel} to {self.from_frame_rel}: {ex}')
@@ -425,6 +449,37 @@ class motion(Node, metaclass=dgpy_Module):
         ret = client(cli, serviceType, serviceName)        
         
         return ret
+       
+    def reconPoseArray(self, subdivision, angle):
+        recon_pose_array = PoseArray()
+        recon_pose_array.header.frame_id = "world"
+        if subdivision % 2 == 0:
+            subdivision += 1
+        length = 0.5
+        width = 1.0
+        x_postion = 1.0 - length
+        y_postion = -0.01886 - width/2
+        x_unit = length/subdivision
+        y_unit = width/subdivision
+        x_angle = math.pi/angle
+        y_angle = math.pi/angle
+        for e in range(subdivision):
+            for i in range(subdivision):
+                pose = Pose()
+                pose.position.x = x_postion + x_unit * e
+                pose.position.y = y_postion + y_unit * i
+                pose.position.z = 1.2
+                q = transforms3d.euler.euler2quat(-x_angle*math.sin((i-((subdivision-1)/2))*math.pi/(subdivision-1)), y_angle*math.sin((e-(subdivision-1))*math.pi/((subdivision-1)*2)), 0, 'sxyz')
+                pose.orientation = Quaternion(x=q[1], y=q[2], z=q[3], w=q[0])
+                recon_pose_array.poses.append(pose)
+        rclpy.logging.get_logger("recon_pose_array").info(f"Pose array has {len(recon_pose_array.poses)} poses")
+        self.recon_pose_pub.publish(recon_pose_array)
+        return recon_pose_array
+     
+    def addPose(self, pose):
+        self.pose_array.poses.append(pose)
+        return self.pose_pub.publish(self.pose_array)
+
     def SpinnerThread(self):
         InitCompatibleThread(self, "_spinner")
     
