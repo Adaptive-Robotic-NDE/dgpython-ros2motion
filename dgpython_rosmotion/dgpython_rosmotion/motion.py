@@ -81,10 +81,10 @@ from geometry_msgs.msg import PoseArray, Pose, Quaternion, TransformStamped
 from threading import RLock
 from typing import Any
 from rclpy.task import Future
-from tari_interfaces.action import PoseArrayHandler
-from tari_interfaces.srv import TariNoether
-from industrial_reconstruction_msgs.srv import StartReconstruction, StopReconstruction
-from industrial_reconstruction_msgs.msg import NormalFilterParams, RGBDImageParams, TSDFVolumeParams
+# from tari_interfaces.action import PoseArrayHandler
+# from tari_interfaces.srv import TariNoether
+# from industrial_reconstruction_msgs.srv import StartReconstruction, StopReconstruction
+# from industrial_reconstruction_msgs.msg import NormalFilterParams, RGBDImageParams, TSDFVolumeParams
 
 ur = pint.get_application_registry()
 orient_dtype = [('offset', '<f4', (4,)), ('quat', '<f4', (4,))]
@@ -450,26 +450,27 @@ class motion(Node, metaclass=dgpy_Module):
         
         return ret
        
-    def reconPoseArray(self, subdivision, angle):
+    def reconPoseArray(self, full_dome, slice=9, angle=12, length = 0.3, width = 0.15, x_pos = 0.655, y_pos = -0.1, z_pos = 0.946, x_offset=1, y_offset=1):
         recon_pose_array = PoseArray()
         recon_pose_array.header.frame_id = "world"
-        if subdivision % 2 == 0:
-            subdivision += 1
-        length = 0.5
-        width = 1.0
-        x_postion = 1.0 - length
-        y_postion = -0.01886 - width/2
-        x_unit = length/subdivision
-        y_unit = width/subdivision
-        x_angle = math.pi/angle
-        y_angle = math.pi/angle
-        for e in range(subdivision):
-            for i in range(subdivision):
+        x_unit = length/slice
+        y_unit = width/slice
+        if angle != 0:
+            x_angle = math.pi/angle
+            y_angle = math.pi/angle
+        else:
+            x_angle = 0
+            y_angle = 0
+        for e in range(slice):
+            for i in range(slice):
                 pose = Pose()
-                pose.position.x = x_postion + x_unit * e
-                pose.position.y = y_postion + y_unit * i
-                pose.position.z = 1.2
-                q = transforms3d.euler.euler2quat(-x_angle*math.sin((i-((subdivision-1)/2))*math.pi/(subdivision-1)), y_angle*math.sin((e-(subdivision-1))*math.pi/((subdivision-1)*2)), 0, 'sxyz')
+                pose.position.x = x_pos + x_unit * i
+                pose.position.y = y_pos + y_unit * e
+                pose.position.z = z_pos
+                if full_dome:
+                    q = transforms3d.euler.euler2quat(-y_angle*math.sin((e-((slice-1)/2))*math.pi/(slice-1)), x_angle*math.sin((i-((slice-x_offset)/2))*math.pi/((slice-1))), 0, 'sxyz')
+                else:
+                    q = transforms3d.euler.euler2quat(-y_angle*math.sin((e-((slice-1)/2))*math.pi/(slice-1)), x_angle*math.sin((i-(slice-1))*math.pi/((slice-1)*2)), 0, 'sxyz')
                 pose.orientation = Quaternion(x=q[1], y=q[2], z=q[3], w=q[0])
                 recon_pose_array.poses.append(pose)
         rclpy.logging.get_logger("recon_pose_array").info(f"Pose array has {len(recon_pose_array.poses)} poses")
