@@ -1,13 +1,12 @@
 
-from tari_interfaces.srv import TariNoether
-from tari_interfaces.srv import TariMeshFilter
+from tari_interfaces.srv import TariNoether, TariMeshFilter, StartKeyRec, StopKeyRec
 from tari_interfaces.action import PoseArrayHandler
 from industrial_reconstruction_msgs.srv import StartReconstruction, StopReconstruction
 
 
 # ros  = None
 
-global noether_client, start_reconstruction, stop_reconstruction, motion_client, mesh_filter_client
+global noether_client, start_reconstruction, stop_reconstruction, motion_client, mesh_filter_client, keyence_start, keyence_stop
 
 noether_client = ros.clientCreation(False, TariNoether, 'tari_noether')
 noether_client.registerInterface('TariNoether', TariNoether)
@@ -23,6 +22,12 @@ mesh_filter_client.registerInterface('TariMeshFilter', TariMeshFilter)
 
 motion_client = ros.clientCreation(True, PoseArrayHandler, 'pose_array_action')
 motion_client.registerInterface('PoseArrayHandler', PoseArrayHandler)
+
+keyence_start = ros.clientCreation(False, StartKeyRec, 'start_key_rec')
+keyence_start.registerInterface('StartKeyRec', StartKeyRec)
+
+keyence_stop = ros.clientCreation(False, StopKeyRec, 'stop_key_rec')
+keyence_stop.registerInterface('StopKeyRec', StopKeyRec)
 
 # include(dgpython_rosmotion, 'services.dpi')
 
