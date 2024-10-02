@@ -273,7 +273,7 @@ class motion(Node, metaclass=dgpy_Module):
         eoat_pose_ref.rec.mark_metadata_done()
         eoat_pose_ref.rec.mark_data_ready()
 
-    def Move(self, msg, vel, acc):
+    def Move(self, msg, vel=0.1, acc=0.1):
 
         goal_msg = DgPython.Goal()
         
