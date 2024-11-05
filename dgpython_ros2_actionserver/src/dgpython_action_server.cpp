@@ -70,7 +70,15 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/point.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+#include <shape_msgs/msg/mesh.hpp>
+#include <shape_msgs/msg/mesh_triangle.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
+#include <moveit/robot_model/robot_model.h>
+#include <moveit/robot_model_loader/robot_model_loader.h>
+#include <moveit/planning_scene_interface/planning_scene_interface.h>
+#include <moveit_msgs/msg/collision_object.hpp>
 
 #include "dgpython_ros2_actionserver/visibility_control.h"
 
@@ -89,6 +97,9 @@ public:
   {
     using namespace std::placeholders;
 
+    mesh_sub_ = this->create_subscription<visualization_msgs::msg::Marker>(
+      "industrial_reconstruction_mesh", 10, std::bind(&DgPythonActionServer::mesh_callback, this, _1));
+
     this->action_server_ = rclcpp_action::create_server<DgPython>(
       this,
       "dgpython",
@@ -100,7 +111,42 @@ public:
 
 private:
   rclcpp_action::Server<DgPython>::SharedPtr action_server_;
+  rclcpp::Subscription<visualization_msgs::msg::Marker>::SharedPtr mesh_sub_;
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_interface_;
+  moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+  moveit_msgs::msg::CollisionObject collision_object;
+  shape_msgs::msg::Mesh collision_mesh_;
+
+  void mesh_callback(const visualization_msgs::msg::Marker& mesh)
+  {
+
+    RCLCPP_INFO(this->get_logger(), "Received idustrial reconstruction mesh");
+
+    // Convert points from marker to mesh vertices
+    collision_mesh_.vertices.clear();
+    for (const auto& point : mesh.points) {
+        geometry_msgs::msg::Point vertex;
+        vertex = point;  // Direct assignment of points
+        collision_mesh_.vertices.push_back(vertex);
+    }
+
+    // Create triangles from points (assuming points are arranged in triangles)
+    collision_mesh_.triangles.clear();
+    for (size_t i = 0; i < mesh.points.size(); i += 3) {
+        shape_msgs::msg::MeshTriangle triangle;
+        triangle.vertex_indices[0] = i;
+        triangle.vertex_indices[1] = i + 1;
+        triangle.vertex_indices[2] = i + 2;
+        collision_mesh_.triangles.push_back(triangle);
+    }
+
+    collision_object.meshes.push_back(collision_mesh_);
+    collision_object.mesh_poses.push_back(mesh.pose);
+    collision_object.operation = collision_object.ADD;
+    planning_scene_interface.applyCollisionObject(collision_object);
+
+    
+  }
 
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID & uuid,
@@ -108,7 +154,7 @@ private:
   {
     if(!goal->state.empty())
     {
-      RCLCPP_INFO(this->get_logger(), "Received goal request with state (%s)", goal->state);
+      RCLCPP_INFO(this->get_logger(), "Received goal request with state (%s)", goal->state.c_str());
       (void)uuid;
       return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
@@ -116,7 +162,7 @@ private:
     {
       RCLCPP_INFO(this->get_logger(), "Received goal request received pose array with %d poses", goal->pose_array.poses.size());
     }
-    else if(goal->destination != nullptr)
+    else if(goal->destination.position.x != 0.0 && goal->destination.position.y != 0.0 && goal->destination.position.z != 0.0)
     {
       RCLCPP_INFO(this->get_logger(), "Received goal request with destination (%f, %f, %f)", goal->destination.position.x, goal->destination.position.y, goal->destination.position.z);
     }
@@ -161,6 +207,22 @@ private:
     move_group_interface_->setMaxAccelerationScalingFactor(goal->acceleration);
     move_group_interface_->setPlanningTime(10.0);
     if(!goal->state.empty()){
+
+        // Retrieve the robot model
+      //  const moveit::core::RobotModelPtr robot_model = move_group_interface_.getModel();
+      //  if (!robot_model) {
+      //      RCLCPP_ERROR(this->get_logger(), "Failed to get robot model.");
+      //      return;
+      //  }
+
+        // Get the named targets from the SRDF
+      //  std::vector<std::string> named_targets;
+      //  robot_model->getJointModelGroup("ur_manipulator")->getVariableNames(named_targets);
+      //
+      //  RCLCPP_INFO(this->get_logger(), "Available named targets:");
+      //  for (const auto& target : named_targets) {
+      //      RCLCPP_INFO(this->get_logger(), "%s", target.c_str());
+      //  }
         moveit::planning_interface::MoveGroupInterface::Plan my_plan;
         std::string target_name = goal->state;
         move_group_interface_->setNamedTarget(target_name);
@@ -227,7 +289,7 @@ private:
         return;
       }
     }
-    else if(goal->destination != nullptr)
+    else if(goal->destination.position.x != 0.0 && goal->destination.position.y != 0.0 && goal->destination.position.z != 0.0)
     {
       auto const target_pose = [](geometry_msgs::msg::Pose msg){
     	    			geometry_msgs::msg::Pose out;
