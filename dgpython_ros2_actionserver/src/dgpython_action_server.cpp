@@ -116,11 +116,12 @@ private:
   moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
   moveit_msgs::msg::CollisionObject collision_object;
   shape_msgs::msg::Mesh collision_mesh_;
+  int counter = 1;
 
   void mesh_callback(const visualization_msgs::msg::Marker& mesh)
   {
 
-    RCLCPP_INFO(this->get_logger(), "Received idustrial reconstruction mesh");
+    RCLCPP_INFO(this->get_logger(), "Received idustrial reconstruction mesh %d", counter);
 
     // Convert points from marker to mesh vertices
     collision_mesh_.vertices.clear();
@@ -140,11 +141,14 @@ private:
         collision_mesh_.triangles.push_back(triangle);
     }
 
+    collision_object.header.frame_id = "world";
+    collision_object.id = "object_" + std::to_string(counter);
+
     collision_object.meshes.push_back(collision_mesh_);
     collision_object.mesh_poses.push_back(mesh.pose);
     collision_object.operation = collision_object.ADD;
     planning_scene_interface.applyCollisionObject(collision_object);
-
+    counter++;
     
   }
 
