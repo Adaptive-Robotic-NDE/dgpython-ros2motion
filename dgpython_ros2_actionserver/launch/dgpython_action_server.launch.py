@@ -96,12 +96,14 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import PathJoinSubstitution, Command, FindExecutable, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
 
+launch_d415 = LaunchConfiguration("launch_d415")
+launch_azure = LaunchConfiguration("launch_azure")
+launch_keyence = LaunchConfiguration("launch_keyence")
+launch_zed = LaunchConfiguration("launch_zed")
+tooling = LaunchConfiguration("tooling")
+
 def get_robot_description():
 
-    launch_d415 = LaunchConfiguration("launch_d415")
-    launch_azure = LaunchConfiguration("launch_azure")
-    launch_keyence = LaunchConfiguration("launch_keyence")
-    tooling = LaunchConfiguration("tooling")
 
     joint_limit_params = PathJoinSubstitution(
         [FindPackageShare("ur_description"), "config", "ur10e", "joint_limits.yaml"]
@@ -165,6 +167,8 @@ def get_robot_description():
             "launch_keyence:=",
             launch_keyence,
             " ",
+            "launch_zed:=",
+            launch_zed,
         ]
     )
 
@@ -190,6 +194,18 @@ def get_robot_description_semantic():
             " ",
             "tooling:=",
             "new",
+            " ",
+            "launch_d415:=",
+            launch_d415,
+            " ",
+            "launch_azure:=",
+            launch_azure,
+            " ",
+            "launch_keyence:=",
+            launch_keyence,
+            " ",
+            "launch_zed:=",
+            launch_zed,
             " ",
         ]
     )
@@ -226,14 +242,21 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "launch_azure",
             default_value="false",
-            description="Launch realsense Azure Kinect camera",
+            description="Launch Azure Kinect camera",
         )
     )
     declared_arguments.append(
         DeclareLaunchArgument(
             "launch_keyence",
             default_value="false",
-            description="Launch realsense Keyence laser profiler",
+            description="Launch Keyence laser profiler",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "launch_zed",
+            default_value="false",
+            description="Launch ZED Stereo camera",
         )
     )
     declared_arguments.append(

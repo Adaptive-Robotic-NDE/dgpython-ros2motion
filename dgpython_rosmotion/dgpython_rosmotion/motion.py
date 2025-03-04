@@ -57,6 +57,8 @@
 import sys
 import spatialnde2 as snde
 import numpy as np
+import cv2
+from cv_bridge import CvBridge
 import time
 import pint
 import copy
@@ -77,7 +79,9 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
-from geometry_msgs.msg import PoseArray, Pose, Quaternion, TransformStamped, Point
+from geometry_msgs.msg import PointStamped, PoseArray, Pose, Quaternion, TransformStamped, Point
+from yolo_msgs.msg import DetectionArray
+from sensor_msgs.msg import Image
 from ur_msgs.msg import IOStates
 from threading import RLock
 from typing import Any
@@ -208,8 +212,14 @@ class motion(Node, metaclass=dgpy_Module):
         self.pose_pub = self.create_publisher(PoseArray, 'pose_array', 10)
         self.recon_pose_pub = self.create_publisher(PoseArray, 'recon_pose_array', 10)
         self.gpio_sub = self.create_subscription(IOStates, '/io_and_status_controller/io_states', self.gpio_callback, 10)
+        self.detect_sub = self.create_subscription(DetectionArray, '/yolo/detections', self.detection_callback, 10)
+        self.tracking_sub = self.create_subscription(DetectionArray, '/yolo/tracking', self.tracking_callback, 10)
+        self.depth_sub = self.create_subscription(Image, '/depth_to_rgb/image_raw', self.depth_image_callback, 10)
+        self.bridge = CvBridge()
         self.gpio_sub
         self.counter = 0
+        self.detections = DetectionArray()
+        self.tracked_detections = DetectionArray()
         self.svd_msg = IOStates()
         self.pose_array = PoseArray()
         self.pose_array.header.frame_id = to_frame_rel
@@ -273,8 +283,23 @@ class motion(Node, metaclass=dgpy_Module):
     def gpio_callback(self, msg):
         self.svd_msg = msg
         return
+    
+    def tracking_callback(self, msg):
+        self.tracked_detection = msg
+        return
+    
+    def detection_callback(self, msg):
+        self.detected = msg
+        return
+    
+    def depth_image_callback(self, msg):
+        self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='16UC1')
+        # center_x = self.depth_image.shape[1] // 2
+        # center_y = self.depth_image.shape[0] // 2
+        # self.depth_value = self.depth_image[center_y, center_x]
+        return
 
-    def specimenMesh(self,specimen_mesh=None):
+    def specimenMesh(self,x=0,y=0,z=0,ox=0,oy=0,oz=0,ow=1,specimen_mesh=None):
         if specimen_mesh is not None:
             self.counter += 1
             self.specimen_model_file.append(specimen_mesh)
@@ -286,7 +311,26 @@ class motion(Node, metaclass=dgpy_Module):
                 self.specimen_data_chan.append(self.recdb.define_channel(self.specimen_data_channel[self.counter-1],"main",self.recdb.raw()))
                 self.specimen_recording = snde.x3d_load_geometry(self.recdb, self.graphman, self.specimen_model_file[self.counter-1], 0, 'main', self.recdb.raw(), self.specimen_model_tree[self.counter-1], None, ['reindex_vertices', 'reindex_tex_vertices'] + snde.project_onto_parameterization_processing_tags)
                 self.specimen_pose_chan.append(self.recdb.define_channel(self.specimen_pose_channel[self.counter-1], "main", self.recdb.raw()))
-                self._SpecimenPosition(self.specimen_model_tree[self.counter-1], self.specimen_pose_chan[self.counter-1])
+                self.positioner_channel.append("/probe_and_specimen_" + str(self.counter))
+                self.positioner_chan.append(self.recdb.define_channel(self.positioner_channel[self.counter-1],"main",self.recdb.raw()))            
+                f = math.sqrt(ow*ow + 
+                              ox*ox + 
+                              oy*oy + 
+                              oz*oz)
+                
+                q = self.quatRot([ow/f,ox/f,oy/f,oz/f])
+
+                try:
+                    self.specimen_position[self.counter-1] = np.array(((x,
+                                                   y,
+                                                   z,
+                                                   0),(q[0],q[1],q[2],q[3])),dtype=orient_dtype)
+                except:
+                    self.specimen_position.append(np.array(((x,
+                                                   y,
+                                                   z,
+                                                   0),(q[0],q[1],q[2],q[3])),dtype=orient_dtype))
+                self._SpecimenPosition(self.specimen_position[self.counter-1], self.specimen_model_tree[self.counter-1], self.specimen_pose_chan[self.counter-1])
             finally:
                 transact.end_transaction()
                 # self.join(specimenNum=self.counter)
@@ -294,7 +338,7 @@ class motion(Node, metaclass=dgpy_Module):
         else:
             self.specimen_mesh = None
 
-    def join(self,x=0.759,y=-0.926,z=-0.475,ox=0,oy=0,oz=0,ow=1, background_channel=None, specimenNum=1):
+    def join(self, background_channel=None, specimenNum=1):
 
         if self.counter == 0 : return print(f"{Colors.RED}No specimens available{Colors.RESET}")
 
@@ -302,74 +346,41 @@ class motion(Node, metaclass=dgpy_Module):
 
         if background_channel is None : background_channel=self.specimen_pose_channel[specimenNum-1]
 
-        try:
-            if self.positioner_channel[specimenNum-1]:
-                print(f"Updating self.positioner_channel[{specimenNum}]")
-        except Exception as e:
-            self.positioner_channel.append("/probe_and_specimen_" + str(specimenNum))
-            print(f"{Colors.GREEN}Adding channel {self.positioner_channel[specimenNum-1]}{Colors.RESET}")
-            try:
-                transact = self.recdb.start_transaction()
-                self.positioner_chan.append(self.recdb.define_channel(self.positioner_channel[specimenNum-1],"main",self.recdb.raw()))
-            except Exception as e:
-                print(e)
-            finally:
-                transact.end_transaction()
-
-
         model_channel=snde.recdb_path_join(self.eoat_model_tree,"meshed")
 
-        print(f"{Colors.MAGENTA}Positioner channel: {self.positioner_channel}{Colors.RESET}")
+        # print(f"{Colors.MAGENTA}Positioner channel: {self.positioner_channel}{Colors.RESET}")
 
         model_channel = str(model_channel)
-        print("Model Channel: %s" % model_channel)
+        # print("Model Channel: %s" % model_channel)
         background_channel = str(background_channel)
-        print("Background Channel: %s" % background_channel)
+        # print("Background Channel: %s" % background_channel)
 
-
-        try:
-            transact = self.recdb.start_transaction()
-            try:
-                self.specimen_position[specimenNum-1] = np.array(((x,
-                                               y,
-                                               z,
-                                               0),(ox,oy,oz,ow)),dtype=orient_dtype)
-            except:
-                self.specimen_position.append(np.array(((x,
-                                               y,
-                                               z,
-                                               0),(ox,oy,oz,ow)),dtype=orient_dtype))
-            self.probe_position = np.array(((self.t.transform.translation.x,
-                                        self.t.transform.translation.z * -1,
-                                        self.t.transform.translation.y,
-                                        0),(
-                                        self.t.transform.rotation.x, 
-                                        self.t.transform.rotation.y, 
-                                        self.t.transform.rotation.z, 
-                                        self.t.transform.rotation.w)),
-                                      dtype=orient_dtype)
-            vsop = snde.VectorOfStringOrientationPairs([snde.StringOrientationPair('/graphics/specimen_'+ str(specimenNum) +'/meshed',snde.snde_orientation3(self.specimen_position[specimenNum-1])), snde.StringOrientationPair('/graphics/probe/meshed',snde.snde_orientation3(self.probe_position))])
-            rec = snde.create_assembly_recording(self.recdb, self.positioner_chan[specimenNum-1], self.recdb.raw(), vsop)
-            rec.mark_data_and_metadata_ready()
-        except Exception as e:
-            print(e)
-        finally:
-            transact.end_transaction()
+        self.probe_position = np.array(((self.t.transform.translation.x,
+                                    self.t.transform.translation.y,
+                                    self.t.transform.translation.z,
+                                    0),( 
+                                    self.arm_q[0],
+                                    self.arm_q[1],
+                                    self.arm_q[2],
+                                    self.arm_q[3])),
+                                  dtype=orient_dtype)
+        vsop = snde.VectorOfStringOrientationPairs([snde.StringOrientationPair('/graphics/specimen_'+ str(specimenNum) +'/meshed',snde.snde_orientation3(self.specimen_position[specimenNum-1])), snde.StringOrientationPair('/graphics/probe/meshed',snde.snde_orientation3(self.probe_position))])
+        rec = snde.create_assembly_recording(self.recdb, self.positioner_chan[specimenNum-1], self.recdb.raw(), vsop)
+        rec.mark_data_and_metadata_ready()
 
 
 
-    def _SpecimenPosition(self, tree, chan):
+    def _SpecimenPosition(self, orientation, tree, chan):
         specimen_pose_ref = snde.create_pose_channel_ndarray_ref(self.recdb, chan, self.recdb.raw(), snde.recdb_path_join(tree, "meshed"))
         specimen_pose_ref.allocate_storage([1])
-        specimen_pose_rec = snde.pose_channel_recording.from_ndarray_recording(specimen_pose_ref.rec)
-        # specimen_pose_ref.data()[0] = np.array(((0.0,0.0,0.0,0),(0.0,0.0,0.0,1.0)),dtype=orient_dtype)
+        specimen_pose_ref.data()[0] = orientation
         specimen_pose_ref.rec.mark_metadata_done()
         specimen_pose_ref.rec.mark_data_ready()
 
     def _NewEOATPositionInTransaction(self, orientation):
         eoat_pose_ref = snde.create_pose_channel_ndarray_ref(self.recdb, self.eoat_pose_chan, self.recdb.raw(), snde.recdb_path_join(self.eoat_model_tree, "meshed"))
         eoat_pose_ref.allocate_storage([1])
-        eoat_pose_rec = snde.pose_channel_recording.from_ndarray_recording(eoat_pose_ref.rec)
+        # eoat_pose_rec = snde.pose_channel_recording.from_ndarray_recording(eoat_pose_ref.rec)
         eoat_pose_ref.data()[0] = orientation
         eoat_pose_ref.rec.mark_metadata_done()
         eoat_pose_ref.rec.mark_data_ready()
@@ -380,6 +391,7 @@ class motion(Node, metaclass=dgpy_Module):
                 for i in range(self.counter):
                     vsop = snde.VectorOfStringOrientationPairs([snde.StringOrientationPair('/graphics/specimen_'+ str(i+1) +'/meshed',snde.snde_orientation3(self.specimen_position[i])), snde.StringOrientationPair('/graphics/probe/meshed',snde.snde_orientation3(self.probe_position))])
                     rec = snde.create_assembly_recording(self.recdb, self.positioner_chan[i], self.recdb.raw(), vsop)
+                    rec.mark_data_and_metadata_ready()
         except Exception as e:
             self.get_logger().info(f"{Colors.RED}{e}{Colors.RESET}", once=True)
 
@@ -530,18 +542,43 @@ class motion(Node, metaclass=dgpy_Module):
                         self.to_frame_rel,
                         self.from_frame_rel,
                         rclpy.time.Time())
+                
+                self.azure_t = self._tf_buffer.lookup_transform(
+                        self.to_frame_rel,
+                        'azure_rgb',
+                        rclpy.time.Time())
+                # e = transforms3d.euler.quat2euler(self.t.transform.rotation.w,
+                #                               self.t.transform.rotation.x,
+                #                               self.t.transform.rotation.y,
+                #                               self.t.transform.rotation.z)
+                # e_tmp = e
+                # e[1] = e_tmp[2] * -1
+                # e[2] = e_tmp[1]
+            
+                d = math.sqrt(self.t.transform.rotation.w*self.t.transform.rotation.w + 
+                              self.t.transform.rotation.x*self.t.transform.rotation.x + 
+                              self.t.transform.rotation.y*self.t.transform.rotation.y + 
+                              self.t.transform.rotation.z*self.t.transform.rotation.z)
+
+                self.arm_q = self.quatRot([self.t.transform.rotation.w/d,
+                                  self.t.transform.rotation.x/d,
+                                  self.t.transform.rotation.y/d,
+                                  self.t.transform.rotation.z/d])
+
+
                 transact = self.recdb.start_transaction()
                 if self.eoat_mesh is not None:
                     self._NewEOATPositionInTransaction(np.array(((self.t.transform.translation.x,
-                                                                  self.t.transform.translation.z * -1,
                                                                   self.t.transform.translation.y,
+                                                                  self.t.transform.translation.z,
                                                                   0),(
-                                                                  self.t.transform.rotation.x, 
-                                                                  self.t.transform.rotation.y, 
-                                                                  self.t.transform.rotation.z, 
-                                                                  self.t.transform.rotation.w)),dtype=orient_dtype))
+                                                                  self.arm_q[0],
+                                                                  self.arm_q[1],
+                                                                  self.arm_q[2],
+                                                                  self.arm_q[3])),dtype=orient_dtype))
                 try:
-                    if self.positioner_chan[self.counter]:
+                    if self.positioner_chan[self.counter-1]:
+                        # self.get_logger().info(f'Poistioner channel {self.counter} found', throttle_duration_sec=3)
                         if self.counter:
                             for i in range(self.counter):
                                 self.join(specimenNum=i+1)
@@ -549,11 +586,36 @@ class motion(Node, metaclass=dgpy_Module):
                     self.get_logger().info(f"{e}", once=True)
                 transact.end_transaction()
             except TransformException as ex:
-                self.get_logger().info(f'Could not transform {self.to_frame_rel} to {self.from_frame_rel}: {ex}', throttle_duration_sec=3)
+                self.get_logger().info(f'Could not transform {self.to_frame_rel} to {self.from_frame_rel}: {ex}', once=True)
+
+            try:
+
+                self.azure_t = self._tf_buffer.lookup_transform(
+                        self.to_frame_rel,
+                        'azure_rgb',
+                        rclpy.time.Time())
+                
+            except Exception as e:
+
+                self.get_logger().info(f"Azure trasnform error: {e}", once=True)
 
             r.sleep()
 
     
+    def quatRot(self, quat):
+
+                q = []
+
+                w = 0.7071
+                x = 0.7071
+
+                q.append(quat[0]*x+quat[1]*w)
+                q.append(quat[2]*w+quat[3]*x)
+                q.append(quat[3]*w-quat[2]*x)
+                q.append(quat[0]*w-quat[1]*x)
+
+                return q
+
     # clientCreation(StartReconstruction, "start_reconstruction", TariReconstruction)
 
     def clientCreation(self, action, serviceType, serviceName):
@@ -561,8 +623,8 @@ class motion(Node, metaclass=dgpy_Module):
             cli = ActionClient(self, serviceType, serviceName)
         else:
             cli = self.create_client(serviceType, serviceName)
-            while not cli.wait_for_service(timeout_sec=1.0):
-                self.get_logger().info(f'{serviceName} service not available, waiting again...')
+            # while not cli.wait_for_service(timeout_sec=1.0):
+            #     self.get_logger().info(f'{serviceName} service not available, waiting again...')
 
         ret = client(cli, serviceType, serviceName)        
         
@@ -599,8 +661,51 @@ class motion(Node, metaclass=dgpy_Module):
         return recon_pose_array
      
     def addPose(self, pose):
-        self.pose_array.poses.append(pose)
+
+        print("uhhhh")
+        
+        if isinstance(pose, Pose):
+            print(f"Received pose: {pose}")
+            self.pose_array.poses.append(pose)
+
+        elif isinstance(pose, TransformStamped):
+            t = Pose()
+
+            t.position.x = pose.transform.translation.x
+            t.position.y = pose.transform.translation.y
+            t.position.z = pose.transform.translation.z
+
+            t.orientation.x = pose.transform.rotation.x
+            t.orientation.y = pose.transform.rotation.y
+            t.orientation.z = pose.transform.rotation.z
+            t.orientation.w = pose.transform.rotation.w
+
+            self.pose_array.poses.append(t)
+
+        elif isinstance(pose, list):
+            self.pose_array.poses = pose
+        
+        elif isinstance(pose, PointStamped):
+            t = Pose()
+
+            t.position.x = pose.point.x
+            t.position.y = pose.point.y
+            t.position.z = pose.point.z
+
+            self.pose_array.poses.append(t)
+
+        else:
+
+            rclpy.logging.get_logger("Add Pose").error("Wrong type")
+            return
+
+        print(f"Pose array is now:\n\n{self.pose_array}\n")
+
+
         return self.pose_pub.publish(self.pose_array)
+    
+    def pubPoseArray(self, pose_array):
+        return self.pose_pub.publish(pose_array)
 
     def SpinnerThread(self):
         InitCompatibleThread(self, "_spinner")

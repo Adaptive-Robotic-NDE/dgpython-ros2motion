@@ -1,5 +1,5 @@
 
-from tari_interfaces.srv import TariNoether, TariMeshFilter, StartKeyRec, StopKeyRec
+from tari_interfaces.srv import  StartKeyRec, StopKeyRec, Segmentor,TariNoether, TariMeshFilter, X3dConverter #AzureFovScaler
 from tari_interfaces.action import PoseArrayHandler
 from industrial_reconstruction_msgs.srv import StartReconstruction, StopReconstruction
 from ur_msgs.srv import SetIO
@@ -8,7 +8,8 @@ from std_srvs.srv import SetBool
 # ros  = None
 
 global noether_client, start_reconstruction, stop_reconstruction, motion_client, mesh_filter_client
-global keyence_start, keyence_stop, gpio_client, zed_map_client
+global keyence_start, keyence_stop, gpio_client, zed_map_client, segmentor_client, x3d_converter_client
+# global azure_client
 
 noether_client = ros.clientCreation(False, TariNoether, 'tari_noether')
 noether_client.registerInterface('TariNoether', TariNoether)
@@ -34,8 +35,18 @@ keyence_stop.registerInterface('StopKeyRec', StopKeyRec)
 gpio_client = ros.clientCreation(False, SetIO, '/io_and_status_controller/set_io')
 gpio_client.registerInterface('SetIO', SetIO)
 
-zed_map_client = ros.clientCreation(False, SetBool, '/zed/zed_node/enable_mapping')
-zed_map_client.registerInterface('SetBool', SetBool)
+segmentor_client = ros.clientCreation(False, Segmentor, 'segmentor')
+segmentor_client.registerInterface('Segmentor', Segmentor)
+
+x3d_converter_client = ros.clientCreation(False, X3dConverter, 'x3d_converter')
+x3d_converter_client.registerInterface('X3dConverter', X3dConverter)
+
+yolo_enable_client = ros.clientCreation(False, SetBool, '/yolo/enable')
+yolo_enable_client.registerInterface('SetBool', SetBool)
+
+# azure_client = ros.clientCreation(False, AzureFovScaler, 'azure_fov_scaler')
+# azure_client.registerInterface('AzureFovScaler', AzureFovScaler)
+
 
 # include(dgpython_rosmotion, 'services.dpi')
 
