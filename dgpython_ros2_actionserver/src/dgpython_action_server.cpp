@@ -78,6 +78,12 @@
 #include <moveit/robot_model/robot_model.h>
 #include <moveit/robot_model_loader/robot_model_loader.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
+#include <octomap_msgs/msg/octomap.hpp>
+#include <octomap_msgs/conversions.h>
+#include <octomap/octomap.h>
+#include <octomap/OcTree.h>
+#include <moveit/planning_scene/planning_scene.h>
+#include <moveit/robot_state/conversions.h>
 #include <moveit_msgs/msg/collision_object.hpp>
 
 #include "dgpython_ros2_actionserver/visibility_control.h"
@@ -100,6 +106,9 @@ public:
     mesh_sub_ = this->create_subscription<visualization_msgs::msg::Marker>(
       "industrial_reconstruction_mesh", 10, std::bind(&DgPythonActionServer::mesh_callback, this, _1));
 
+//    octomap_subscription_ = this->create_subscription<octomap_msgs::msg::Octomap>(
+//      "/octomap_binary", 10, std::bind(&DgPythonActionServer::octomap_callback, this, std::placeholders::_1));
+
     this->action_server_ = rclcpp_action::create_server<DgPython>(
       this,
       "dgpython",
@@ -112,10 +121,12 @@ public:
 private:
   rclcpp_action::Server<DgPython>::SharedPtr action_server_;
   rclcpp::Subscription<visualization_msgs::msg::Marker>::SharedPtr mesh_sub_;
+  rclcpp::Subscription<octomap_msgs::msg::Octomap>::SharedPtr octomap_subscription_;
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_interface_;
   moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
   moveit_msgs::msg::CollisionObject collision_object;
   shape_msgs::msg::Mesh collision_mesh_;
+  planning_scene::PlanningScenePtr planning_scene_;
   int counter = 1;
 
   void mesh_callback(const visualization_msgs::msg::Marker& mesh)
@@ -151,6 +162,64 @@ private:
     counter++;
     
   }
+//  void octomap_callback(const octomap_msgs::msg::Octomap::SharedPtr msg)
+//  {
+//    RCLCPP_INFO(this->get_logger(), "Received Octomap");
+//  
+//    // Convert the octomap message to an octree
+//    std::shared_ptr<octomap::OcTree> octree(dynamic_cast<octomap::OcTree*>(octomap_msgs::msgToMap(*msg)));
+//  
+//    if (octree)
+//    {
+//      // Convert the octree to an OctomapWithPose message
+//      octomap_msgs::msg::OctomapWithPose octomap_with_pose_msg;
+//      octomap_msgs::fullMapToMsg(*octree, octomap_with_pose_msg.octomap);
+//      octomap_with_pose_msg.header.frame_id = "world"; // Or the appropriate frame
+//      octomap_with_pose_msg.pose.orientation.w = 1.0; // Set default orientation
+//  
+//      // Get the planning scene
+//      if (!planning_scene_) {
+//          planning_scene_ = std::make_shared<planning_scene::PlanningScene>(move_group_interface_->getRobotModel());
+//      }
+//  
+//      // Process the octomap message
+//      planning_scene_->processOctomapMsg(octomap_with_pose_msg.octomap);
+//  
+//      // Notify the planning scene that the world has changed
+//      // planning_scene_->setWorldChanged(true); // No longer needed
+//  
+//      RCLCPP_INFO(this->get_logger(), "Octomap integrated into planning scene");
+//    }
+//    else
+//    {
+//      RCLCPP_ERROR(this->get_logger(), "Failed to convert Octomap message to OcTree");
+//    }
+//  }
+//  void octomap_callback(const octomap_msgs::msg::Octomap::SharedPtr msg)
+//  {
+//    RCLCPP_INFO(this->get_logger(), "Received Octomap");
+//  
+//    // Convert the octomap message to an octree
+//    std::shared_ptr<octomap::OcTree> octree(dynamic_cast<octomap::OcTree*>(octomap_msgs::msgToMap(*msg)));
+//  
+//    if (octree)
+//    {
+//      // Get the planning scene
+//      planning_scene_ = move_group_interface_->getPlanningScene();
+//  
+//      // Update the planning scene with the octree
+//      planning_scene->processOctomap(*octree);
+//  
+//      // Notify the planning scene that the world has changed
+//      planning_scene->setWorldChanged(true);
+//  
+//      RCLCPP_INFO(this->get_logger(), "Octomap integrated into planning scene");
+//    }
+//    else
+//    {
+//      RCLCPP_ERROR(this->get_logger(), "Failed to convert Octomap message to OcTree");
+//    }
+//  }
 
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID & uuid,
