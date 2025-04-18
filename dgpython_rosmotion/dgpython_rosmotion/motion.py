@@ -78,7 +78,7 @@ from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformBroadcaster
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, WrenchStamped
 from geometry_msgs.msg import PointStamped, PoseArray, Pose, Quaternion, TransformStamped, Point
 from yolo_msgs.msg import DetectionArray
 from sensor_msgs.msg import Image
@@ -210,19 +210,30 @@ class motion(Node, metaclass=dgpy_Module):
         super().__init__('dataguzzler_frame_publisher')
         self.get_logger().info("Dataguzzler Frame Publisher Module Starting")
         self.pose_pub = self.create_publisher(PoseArray, 'pose_array', 10)
+        self.coordinate_pub = self.create_publisher(PoseArray, 'coordinate_array', 10)
+        self.center_pub = self.create_publisher(PoseArray, 'center_array', 10)
+        self.yolo_pub = self.create_publisher(PoseArray, 'yolo_array', 10)
         self.recon_pose_pub = self.create_publisher(PoseArray, 'recon_pose_array', 10)
         self.gpio_sub = self.create_subscription(IOStates, '/io_and_status_controller/io_states', self.gpio_callback, 10)
         self.detect_sub = self.create_subscription(DetectionArray, '/yolo/detections', self.detection_callback, 10)
         self.tracking_sub = self.create_subscription(DetectionArray, '/yolo/tracking', self.tracking_callback, 10)
         self.depth_sub = self.create_subscription(Image, '/depth_to_rgb/image_raw', self.depth_image_callback, 10)
+        self.force_sub = self.create_subscription(WrenchStamped, '/force_torque_sensor_broadcaster/wrench', self.force_callback, 10)
         self.bridge = CvBridge()
         self.gpio_sub
         self.counter = 0
         self.detections = DetectionArray()
         self.tracked_detections = DetectionArray()
         self.svd_msg = IOStates()
+        self.force_msg = WrenchStamped()
         self.pose_array = PoseArray()
         self.pose_array.header.frame_id = to_frame_rel
+        self.center_array = PoseArray()
+        self.center_array.header.frame_id = to_frame_rel
+        self.coordinate_array = PoseArray()
+        self.coordinate_array.header.frame_id = to_frame_rel
+        self.yolo_array = PoseArray()
+        self.yolo_array.header.frame_id = to_frame_rel
         self.module_name = module_name
         self._params = {}
         self.from_frame_rel = from_frame_rel
@@ -287,6 +298,9 @@ class motion(Node, metaclass=dgpy_Module):
     def tracking_callback(self, msg):
         self.tracked_detection = msg
         return
+    
+    def force_callback(self,msg):
+        self.force_msg = msg
     
     def detection_callback(self, msg):
         self.detected = msg
@@ -661,12 +675,12 @@ class motion(Node, metaclass=dgpy_Module):
         return recon_pose_array
      
     def addPose(self, pose):
-
-        print("uhhhh")
         
         if isinstance(pose, Pose):
-            print(f"Received pose: {pose}")
             self.pose_array.poses.append(pose)
+        
+        elif isinstance(pose, PoseArray):
+            self.pose_array.poses = pose.poses
 
         elif isinstance(pose, TransformStamped):
             t = Pose()
@@ -699,10 +713,53 @@ class motion(Node, metaclass=dgpy_Module):
             rclpy.logging.get_logger("Add Pose").error("Wrong type")
             return
 
-        print(f"Pose array is now:\n\n{self.pose_array}\n")
+        # print(f"Pose array is now:\n\n{self.pose_array}\n")
 
 
         return self.pose_pub.publish(self.pose_array)
+    
+    def addCenterLine(self, pose):
+
+        if isinstance(pose, Pose):
+            self.center_array.poses.append(pose)
+        
+        elif isinstance(pose, PoseArray):
+            self.center_array.poses = pose.poses
+
+        else:
+            rclpy.logging.get_logger("Add Pose").error("Wrong type")
+            return
+        
+        return self.center_pub.publish(self.center_array)
+    
+    
+    def addCoordinate(self, pose):
+
+        if isinstance(pose, Pose):
+            self.coordinate_array.poses.append(pose)
+        
+        elif isinstance(pose, PoseArray):
+            self.coordinate_array.poses = pose.poses
+
+        else:
+            rclpy.logging.get_logger("Add Pose").error("Wrong type")
+            return
+        
+        return self.coordinate_pub.publish(self.coordinate_array)
+    
+    def addDetection(self, pose):
+
+        if isinstance(pose, Pose):
+            self.yolo_array.poses.append(pose)
+        
+        elif isinstance(pose, PoseArray):
+            self.yolo_array.poses = pose.poses
+
+        else:
+            rclpy.logging.get_logger("Add Pose").error("Wrong type")
+            return
+        
+        return self.yolo_pub.publish(self.yolo_array)
     
     def pubPoseArray(self, pose_array):
         return self.pose_pub.publish(pose_array)
