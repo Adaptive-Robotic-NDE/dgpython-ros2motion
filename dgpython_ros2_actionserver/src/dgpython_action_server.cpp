@@ -299,7 +299,7 @@ private:
         moveit::planning_interface::MoveGroupInterface::Plan my_plan;
         std::string target_name = goal->state;
         move_group_interface_->setNamedTarget(target_name);
-        bool success = (move_group_interface_->plan(my_plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+        bool success = (move_group_interface_->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
         if (success) {
             move_group_interface_->execute(my_plan);
         } else {
