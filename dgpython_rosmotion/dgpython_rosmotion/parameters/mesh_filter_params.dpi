@@ -1,0 +1,61 @@
+    ###MESH FILTER###
+
+paramdb.AddParam(Parameter,
+                "mesh_filter_input_filepath",
+                friendlyname="Input File",
+                doc="",
+                group="Mesh Filter",
+                value="/home/labuser/Desktop/test.ply")
+
+paramdb.AddParam(Parameter,
+                "mesh_filter_output_filepath",
+                friendlyname="Output File",
+                doc="",
+                group="Mesh Filter",
+                value="/home/labuser/Desktop/meshFilterResult.ply")
+
+
+paramdb.AddParam(Parameter,
+                "vert_filter",
+                friendlyname="Set to true for vertex filtering",
+                doc="",
+                group="Mesh Vert Filter",
+                value=False)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "cutoff",
+                friendlyname="Cutoff",
+                doc="Vertex Z Value Cutoff",
+                group="Mesh Vert Filter",
+                units="",
+                value=0.96)
+
+paramdb.AddParam(Parameter,
+                "delete_loose_parts",
+                friendlyname="Delete Loose Parts",
+                doc="Keep largest mesh in mesh cluster",
+                group="Mesh Loose Parts Filter",
+                value=False)
+
+paramdb.AddParam(Parameter,
+                "color_filter",
+                friendlyname="Color Filtering",
+                doc="Set to true for color filtering",
+                group="Mesh Color Filter",
+                value=False)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "threshold",
+                friendlyname="Threshold",
+                doc="Color Value Threshold",
+                group="Mesh Color Filter",
+                units="",
+                value=0.15)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "color",
+                friendlyname="Color",
+                doc="Color Value in RGB",
+                group="Mesh Color Filter",
+                units="",
+                value=(0.0, 0.55, 0.44))

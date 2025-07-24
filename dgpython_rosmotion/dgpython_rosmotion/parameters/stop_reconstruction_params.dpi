@@ -1,0 +1,28 @@
+    ###STOP RECONSTRUCTION###
+
+paramdb.AddParam(NumericUnitsParameter,
+                "min_num_faces",
+                friendlyname="Minimum Number of Faces",
+                doc="",
+                group="Stop Industrial Reconstruction",
+                units="",
+                value=1000)
+paramdb.AddParam(NumericUnitsParameter,
+                "angle",
+                friendlyname="Normal Angle",
+                doc="",
+                group="Stop Industrial Reconstruction",
+                units="deg",
+                value=90.0)
+paramdb.AddParam(Parameter,
+                "mesh_filepath",
+                friendlyname="Mesh Filepath",
+                doc="",
+                group="Stop Industrial Reconstruction",
+                value="/home/labuser/Desktop/test.ply")
+paramdb.AddParam(Parameter,
+                "archive_directory",
+                friendlyname="Archive Directory",
+                doc="",
+                group="Stop Industrial Reconstruction",
+                value="/home/labuser/Desktop/")

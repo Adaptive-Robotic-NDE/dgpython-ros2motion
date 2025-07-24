@@ -1,0 +1,147 @@
+
+paramdb.AddParam(Parameter,
+                "output_filepath",
+                friendlyname="Output Filepath",
+                doc="Base path and name for the output files. A timestamp will be added.",
+                group="General",
+                value="/data/tari_scan_data/Cylinder/Front Face/reconstructed_mesh")
+
+# Cropping Parameters
+paramdb.AddParam(Parameter,
+                "perform_cropping",
+                friendlyname="Perform Cropping",
+                doc="Set to true to enable cropping.",
+                group="Cropping",
+                value=True)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_min_x",
+                friendlyname="Crop Min X",
+                doc="Minimum X value for cropping.",
+                group="Cropping",
+                units="",
+                value=0.80)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_max_x",
+                friendlyname="Crop Max X",
+                doc="Maximum X value for cropping.",
+                group="Cropping",
+                units="",
+                value=0.88)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_min_y",
+                friendlyname="Crop Min Y",
+                doc="Minimum Y value for cropping.",
+                group="Cropping",
+                units="",
+                value=-0.22)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_max_y",
+                friendlyname="Crop Max Y",
+                doc="Maximum Y value for cropping.",
+                group="Cropping",
+                units="",
+                value=-0.19)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_min_z",
+                friendlyname="Crop Min Z",
+                doc="Minimum Z value for cropping.",
+                group="Cropping",
+                units="",
+                value=0.98)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_max_z",
+                friendlyname="Crop Max Z",
+                doc="Maximum Z value for cropping.",
+                group="Cropping",
+                units="",
+                value=1.10)
+
+# Filtering Parameters
+paramdb.AddParam(NumericUnitsParameter,
+                "coarse_voxel_divisor",
+                friendlyname="Coarse Voxel Divisor",
+                doc="Divisor for the cloud's longest side to determine voxel size for merging overlaps.",
+                group="Filtering",
+                units="",
+                value=250.0)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "dbscan_eps_multiplier",
+                friendlyname="DBSCAN Epsilon Multiplier",
+                doc="Multiplier for voxel size to set the DBSCAN search radius (eps).",
+                group="Filtering",
+                units="",
+                value=4.0)
+
+paramdb.AddParam(Parameter,
+                "dbscan_min_points",
+                friendlyname="DBSCAN Min Points",
+                doc="Minimum number of points to form a cluster in DBSCAN.",
+                group="Filtering",
+                value=15)
+
+paramdb.AddParam(Parameter,
+                "perform_radius_outlier_removal",
+                friendlyname="Perform Radius Outlier Removal",
+                doc="Set to true to enable radius outlier removal.",
+                group="Filtering",
+                value=False)
+
+paramdb.AddParam(Parameter,
+                "invert_outlier_removal",
+                friendlyname="Invert Outlier Removal",
+                doc="If true, keeps the outliers instead of the inliers.",
+                group="Filtering",
+                value=False)
+
+paramdb.AddParam(Parameter,
+                "radius_outlier_nb_points",
+                friendlyname="Radius Outlier Neighbors",
+                doc="Number of neighbors required within the radius to keep a point.",
+                group="Filtering",
+                value=10)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "radius_outlier_radius_multiplier",
+                friendlyname="Radius Outlier Radius Multiplier",
+                doc="Multiplier for voxel size to set the radius for outlier removal.",
+                group="Filtering",
+                units="",
+                value=2.0)
+
+# Downsampling Parameters
+paramdb.AddParam(Parameter,
+                "perform_uniform_downsampling",
+                friendlyname="Perform Uniform Downsampling",
+                doc="Set to true to enable farthest point downsampling.",
+                group="Downsampling",
+                value=False)
+
+paramdb.AddParam(Parameter,
+                "target_downsample_points",
+                friendlyname="Target Downsample Points",
+                doc="The target number of points after uniform downsampling.",
+                group="Downsampling",
+                value=40000)
+
+# Meshing Parameters
+paramdb.AddParam(Parameter,
+                "ball_pivot_radii",
+                friendlyname="Ball Pivot Radii",
+                doc="List of radii for the Ball Pivoting Algorithm.",
+                group="Meshing",
+                value=[0.001, 0.002, 0.004])
+
+paramdb.AddParam(NumericUnitsParameter,
+                "alpha_shape_multiplier",
+                friendlyname="Alpha Shape Multiplier",
+                doc="Multiplier for the average point distance to determine the alpha value.",
+                group="Meshing",
+                units="",
+                value=3.0)

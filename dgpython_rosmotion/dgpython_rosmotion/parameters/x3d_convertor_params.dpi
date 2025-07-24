@@ -1,0 +1,22 @@
+    ### X3d Converter ###
+
+paramdb.AddParam(Parameter,
+                 "x3d_input_filepath",
+                 friendlyname="Input Filepath",
+                 doc="",
+                 group="X3d Converter",
+                 value="/home/labuser/iron_tari/triangulated_cloud.ply")
+
+paramdb.AddParam(Parameter,
+                 "x3d_output_filepath",
+                 friendlyname="Output Filepath",
+                 doc="",
+                 group="X3d Converter",
+                 value="/home/labuser/iron_tari/specimen.x3d")
+
+paramdb.AddParam(Parameter,
+                 "x3d_flip_normals",
+                 friendlyname="Flip Normals",
+                 doc="",
+                 group="X3d Converter",
+                 value=False)

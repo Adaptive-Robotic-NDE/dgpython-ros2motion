@@ -1,0 +1,68 @@
+    ###START RECONSTRUCTION###
+
+paramdb.AddParam(Parameter,
+                "tracking_frame",
+                friendlyname="Tracking Frame",
+                doc="Optical camera frame for both depth and rgb",
+                group="Start Industrial Reconstruction",
+                value="azure_rgb")
+paramdb.AddParam(Parameter,
+                "relative_frame",
+                friendlyname="Relative Frame",
+                doc="Same relative frame as RViz",
+                group="Start Industrial Reconstruction",
+                value="world")
+paramdb.AddParam(NumericUnitsParameter,
+                "translation_distance",
+                friendlyname="Translation Distance",
+                doc="",
+                group="Start Industrial Reconstruction",
+                units="",
+                value=0.0)
+paramdb.AddParam(NumericUnitsParameter,
+                "rotational_distance",
+                friendlyname="Rotational Distance",
+                doc="",
+                group="Start Industrial Reconstruction",
+                units="",
+                value=0.0)
+paramdb.AddParam(Parameter,
+                "live",
+                friendlyname="Live",
+                doc="",
+                group="Start Industrial Reconstruction",
+                value=True)
+paramdb.AddParam(Parameter,
+                "convert_rgb_to_intensity",
+                friendlyname="Convert RGB to Intensity",
+                doc="",
+                group="Start Industrial Reconstruction",
+                value=False)
+paramdb.AddParam(NumericUnitsParameter,
+                "voxel_length",
+                friendlyname="Voxel Length",
+                doc="",
+                group="Start Industrial Reconstruction",
+                units="m",
+                value=0.001)
+paramdb.AddParam(NumericUnitsParameter,
+                "sdf_trunc",
+                friendlyname="SDF Trunc",
+                doc="",
+                group="Start Industrial Reconstruction",
+                units="",
+                value=0.04)
+paramdb.AddParam(NumericUnitsParameter,
+                "depth_scale",
+                friendlyname="Depth Scale",
+                doc="",
+                group="Start Industrial Reconstruction",
+                units="",
+                value=1000.0)
+paramdb.AddParam(NumericUnitsParameter,
+                "depth_trunc",
+                friendlyname="Depth Scale",
+                doc="",
+                group="Start Industrial Reconstruction",
+                units="",
+                value=0.75)

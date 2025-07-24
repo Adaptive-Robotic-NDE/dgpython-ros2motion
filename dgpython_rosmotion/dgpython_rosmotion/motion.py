@@ -156,16 +156,18 @@ class client(object):
     def registerInterface(self, interfacename, interface):
         self.interfaces[interfacename] = interface
 
-    def sendGoal(self, interface, options):
+    async def sendGoal(self, interface, options):
         goal_msg = self.interfaces[interface].Goal()
         for key in options:
             setattr(goal_msg, key, options[key])
             print(f"Setting {key} to {options[key]}")
         self.client.wait_for_server()
         future = self.client.send_goal_async(goal_msg)
-        while not future.done():
-            time.sleep(0.01)
-        return future.result()
+        # while not future.done():
+        #     time.sleep(0.01)
+        # return future.result()
+        goal_handle = await future
+        return goal_handle
 
     def sendRequest(self, interface, options):
         req = self.interfaces[interface].Request()
@@ -219,6 +221,7 @@ class motion(Node, metaclass=dgpy_Module):
         self.tracking_sub = self.create_subscription(DetectionArray, '/yolo/tracking', self.tracking_callback, 10)
         self.depth_sub = self.create_subscription(Image, '/depth_to_rgb/image_raw', self.depth_image_callback, 10)
         self.force_sub = self.create_subscription(WrenchStamped, '/force_torque_sensor_broadcaster/wrench', self.force_callback, 10)
+        self.click_sub = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
         self.bridge = CvBridge()
         self.gpio_sub
         self.counter = 0
@@ -226,6 +229,8 @@ class motion(Node, metaclass=dgpy_Module):
         self.tracked_detections = DetectionArray()
         self.svd_msg = IOStates()
         self.force_msg = WrenchStamped()
+        self.click_msg = PointStamped()
+        self.click_msg.header.frame_id = to_frame_rel
         self.pose_array = PoseArray()
         self.pose_array.header.frame_id = to_frame_rel
         self.center_array = PoseArray()
@@ -269,7 +274,7 @@ class motion(Node, metaclass=dgpy_Module):
             self.eoat_mesh = None
 
 
-        self._action_client = PatchRclpyIssue1123(self, DgPython, 'dgpython')
+        self._action_client = ActionClient(self, DgPython, 'dgpython')
         #self.broadcaster = self.create_publisher(Pose, "/dataguzzler_frame_publisher", 100)
 
 #        self.pose_array_subscriber = self.create_subscription(
@@ -304,6 +309,10 @@ class motion(Node, metaclass=dgpy_Module):
     
     def detection_callback(self, msg):
         self.detected = msg
+        return
+    
+    def click_callback(self, msg):
+        self.click_msg = msg
         return
     
     def depth_image_callback(self, msg):
@@ -408,6 +417,19 @@ class motion(Node, metaclass=dgpy_Module):
                     rec.mark_data_and_metadata_ready()
         except Exception as e:
             self.get_logger().info(f"{Colors.RED}{e}{Colors.RESET}", once=True)
+
+    def Stop(self):
+        self.get_logger().info('Canceling goal...')
+        cancel_future = self._action_client.cancel_goal_async()
+        cancel_future.add_done_callback(self.cancel_done_callback)
+        self.timer.cancel() 
+
+    def cancel_done_callback(self, future):
+        cancel_response = future.result()
+        if len(cancel_response.goals_canceling) > 0:
+            self.get_logger().info('Goal successfully canceled')
+        else:
+            self.get_logger().info('Goal failed to cancel')
 
 
     def Move(self, msg, vel=0.1, acc=0.1):
@@ -561,6 +583,11 @@ class motion(Node, metaclass=dgpy_Module):
                         self.to_frame_rel,
                         'azure_rgb',
                         rclpy.time.Time())
+                
+                self.keyence_t = self._tf_buffer.lookup_transform(
+                        'probe_end',
+                        'lj_v7080_optical_frame',
+                        rclpy.time.Time())
                 # e = transforms3d.euler.quat2euler(self.t.transform.rotation.w,
                 #                               self.t.transform.rotation.x,
                 #                               self.t.transform.rotation.y,
@@ -677,12 +704,15 @@ class motion(Node, metaclass=dgpy_Module):
     def addPose(self, pose):
         
         if isinstance(pose, Pose):
+            self.get_logger().info("Got Pose")
             self.pose_array.poses.append(pose)
         
         elif isinstance(pose, PoseArray):
+            self.get_logger().info("Got Pose Array")
             self.pose_array.poses = pose.poses
 
         elif isinstance(pose, TransformStamped):
+            self.get_logger().info("Got Transform")
             t = Pose()
 
             t.position.x = pose.transform.translation.x
@@ -697,9 +727,11 @@ class motion(Node, metaclass=dgpy_Module):
             self.pose_array.poses.append(t)
 
         elif isinstance(pose, list):
+            self.get_logger().info("Got List")
             self.pose_array.poses = pose
         
         elif isinstance(pose, PointStamped):
+            self.get_logger().info("Got Point")
             t = Pose()
 
             t.position.x = pose.point.x
@@ -710,7 +742,7 @@ class motion(Node, metaclass=dgpy_Module):
 
         else:
 
-            rclpy.logging.get_logger("Add Pose").error("Wrong type")
+            self.get_logger("Add Pose").error("Wrong type")
             return
 
         # print(f"Pose array is now:\n\n{self.pose_array}\n")
@@ -718,7 +750,7 @@ class motion(Node, metaclass=dgpy_Module):
 
         return self.pose_pub.publish(self.pose_array)
     
-    def addCenterLine(self, pose):
+    def addCross(self, pose):
 
         if isinstance(pose, Pose):
             self.center_array.poses.append(pose)

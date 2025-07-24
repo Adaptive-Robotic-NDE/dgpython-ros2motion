@@ -1,0 +1,97 @@
+    ###MESH SEGMENTOR###
+
+paramdb.AddParam(Parameter,
+                "input_filepath",
+                friendlyname="Input File",
+                doc="",
+                group="Mesh Cluster Filter",
+                value="/home/labuser/Desktop/test.ply")
+
+paramdb.AddParam(Parameter,
+                "output",
+                friendlyname="Output File",
+                doc="",
+                group="Mesh Cluster Filter",
+                value="cloud_cluster_")
+
+paramdb.AddParam(NumericUnitsParameter,
+                "leaf",
+                friendlyname="Leaf Size",
+                doc="",
+                group="Mesh Cluster Filter",
+                units="mm",
+                value=0.01)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "cluster_tolerance",
+                friendlyname="Cluster Tolerance",
+                doc="",
+                group="Mesh Cluster Filter",
+                units="",
+                value=0.05)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "min_cluster_size",
+                friendlyname="Minimum Cluster Size",
+                doc="",
+                group="Mesh Cluster Filter",
+                units="",
+                value=300)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "search_r",
+                friendlyname="Search Radius",
+                doc="",
+                group="Mesh Cluster Filter",
+                units="",
+                value=0.05)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "set_m",
+                friendlyname="Set Mu",
+                doc="",
+                group="Mesh Cluster Filter",
+                units="",
+                value=2.5)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "max_cluster_size",
+                friendlyname="Maximum Cluster Size",
+                doc="",
+                group="Mesh Color Filter",
+                units="",
+                value=25000)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "depth",
+                friendlyname="Depth",
+                doc="",
+                group="Mesh Cluster Filter",
+                units="",
+                value=9)
+
+
+paramdb.AddParam(NumericUnitsParameter,
+                "solver_divide",
+                friendlyname="Solver Divide",
+                doc="",
+                group="Mesh Cluster Filter",
+                units="",
+                value=8)
+
+
+paramdb.AddParam(NumericUnitsParameter,
+                "iso_divide",
+                friendlyname="ISO Divide",
+                doc="",
+                group="Mesh Cluster Filter",
+                units="",
+                value=8)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "point_weight",
+                friendlyname="Point Weight",
+                doc="",
+                group="Mesh Cluster Filter",
+                units="",
+                value=4.0)
