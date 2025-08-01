@@ -71,8 +71,13 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(dgpython_ros2_actioninterface REQUIRED)
+find_package(octomap_msgs REQUIRED)
+find_package(octomap REQUIRED)
+find_package(moveit_core REQUIRED)
 
-include_directories(include)
+include_directories(
+  include
+  ${moveit_core_INCLUDE_DIRS})
 
 add_executable(dgpython_action_server
   src/dgpython_action_server.cpp)
@@ -85,7 +90,16 @@ ament_target_dependencies(dgpython_action_server
   "dgpython_ros2_actioninterface"
   "rclcpp"
   "rclcpp_action"
-  "moveit_ros_planning_interface")
+  "moveit_ros_planning_interface"
+  "octomap"
+  "octomap_msgs"
+  "moveit_core"
+  "geometry_msgs")
+
+target_link_libraries(dgpython_action_server
+  ${OCTOMAP_LIBRARIES}
+  ${moveit_core_LIBRARIES}
+)
 
 install(TARGETS dgpython_action_server
   DESTINATION lib/${PROJECT_NAME})

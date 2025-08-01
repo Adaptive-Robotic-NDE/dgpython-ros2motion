@@ -208,7 +208,7 @@ class motion(Node, metaclass=dgpy_Module):
     #'AcquisitionType': ('Specifies continuous or finite sampling -- Valid options are "CONTINUOUS" or "FINITE"', const.AcquisitionType.FINITE, lambda val: {"CONTINUOUS": const.AcquisitionType.CONTINUOUS, "FINITE": const.AcquisitionType.FINITE}[val], lambda val: {const.AcquisitionType.CONTINUOUS: 'CONTINUOUS', const.AcquisitionType.FINITE: 'FINITE'}[val], lambda val: {const.AcquisitionType.CONTINUOUS: 'CONTINUOUS', const.AcquisitionType.FINITE: 'FINITE'}[val], lambda val: snde.metadatum('daq_params-AcquisitionType', val)),
     #'SampsPerChan': ('Number of Data Points Per Channel', 100, lambda val: val, lambda val: val, lambda val: val, lambda val: snde.metadatum('daq_params-SampsPerChan', val))}
 
-    def __init__(self, module_name, recdb, from_frame_rel, to_frame_rel, eoat_mesh=None, **kwargs):
+    def __init__(self, module_name, recdb, from_frame_rel, to_frame_rel, eoat_mesh=None, depth_image_topic='/depth_to_rgb/image_raw', **kwargs):
         super().__init__('dataguzzler_frame_publisher')
         self.get_logger().info("Dataguzzler Frame Publisher Module Starting")
         self.pose_pub = self.create_publisher(PoseArray, 'pose_array', 10)
@@ -219,7 +219,7 @@ class motion(Node, metaclass=dgpy_Module):
         self.gpio_sub = self.create_subscription(IOStates, '/io_and_status_controller/io_states', self.gpio_callback, 10)
         self.detect_sub = self.create_subscription(DetectionArray, '/yolo/detections', self.detection_callback, 10)
         self.tracking_sub = self.create_subscription(DetectionArray, '/yolo/tracking', self.tracking_callback, 10)
-        self.depth_sub = self.create_subscription(Image, '/depth_to_rgb/image_raw', self.depth_image_callback, 10)
+        self.depth_sub = self.create_subscription(Image, depth_image_topic, self.depth_image_callback, 10)
         self.force_sub = self.create_subscription(WrenchStamped, '/force_torque_sensor_broadcaster/wrench', self.force_callback, 10)
         self.click_sub = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
         self.bridge = CvBridge()

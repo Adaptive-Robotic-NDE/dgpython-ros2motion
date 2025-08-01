@@ -103,8 +103,8 @@ public:
   {
     using namespace std::placeholders;
 
-    mesh_sub_ = this->create_subscription<visualization_msgs::msg::Marker>(
-      "industrial_reconstruction_mesh", 10, std::bind(&DgPythonActionServer::mesh_callback, this, _1));
+//    mesh_sub_ = this->create_subscription<visualization_msgs::msg::Marker>(
+//      "industrial_reconstruction_mesh", 10, std::bind(&DgPythonActionServer::mesh_callback, this, _1));
 
 //    octomap_subscription_ = this->create_subscription<octomap_msgs::msg::Octomap>(
 //      "/octomap_binary", 10, std::bind(&DgPythonActionServer::octomap_callback, this, std::placeholders::_1));
@@ -120,48 +120,48 @@ public:
 
 private:
   rclcpp_action::Server<DgPython>::SharedPtr action_server_;
-  rclcpp::Subscription<visualization_msgs::msg::Marker>::SharedPtr mesh_sub_;
-  rclcpp::Subscription<octomap_msgs::msg::Octomap>::SharedPtr octomap_subscription_;
+  //rclcpp::Subscription<visualization_msgs::msg::Marker>::SharedPtr mesh_sub_;
+  //rclcpp::Subscription<octomap_msgs::msg::Octomap>::SharedPtr octomap_subscription_;
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_interface_;
-  moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
-  moveit_msgs::msg::CollisionObject collision_object;
-  shape_msgs::msg::Mesh collision_mesh_;
-  planning_scene::PlanningScenePtr planning_scene_;
+  //moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+  //moveit_msgs::msg::CollisionObject collision_object;
+  //shape_msgs::msg::Mesh collision_mesh_;
+  //planning_scene::PlanningScenePtr planning_scene_;
   int counter = 1;
 
-  void mesh_callback(const visualization_msgs::msg::Marker& mesh)
-  {
-
-    RCLCPP_INFO(this->get_logger(), "Received idustrial reconstruction mesh %d", counter);
-
-    // Convert points from marker to mesh vertices
-    collision_mesh_.vertices.clear();
-    for (const auto& point : mesh.points) {
-        geometry_msgs::msg::Point vertex;
-        vertex = point;  // Direct assignment of points
-        collision_mesh_.vertices.push_back(vertex);
-    }
-
-    // Create triangles from points (assuming points are arranged in triangles)
-    collision_mesh_.triangles.clear();
-    for (size_t i = 0; i < mesh.points.size(); i += 3) {
-        shape_msgs::msg::MeshTriangle triangle;
-        triangle.vertex_indices[0] = i;
-        triangle.vertex_indices[1] = i + 1;
-        triangle.vertex_indices[2] = i + 2;
-        collision_mesh_.triangles.push_back(triangle);
-    }
-
-    collision_object.header.frame_id = "world";
-    collision_object.id = "object_" + std::to_string(counter);
-
-    collision_object.meshes.push_back(collision_mesh_);
-    collision_object.mesh_poses.push_back(mesh.pose);
-    collision_object.operation = collision_object.ADD;
-    planning_scene_interface.applyCollisionObject(collision_object);
-    counter++;
-    
-  }
+//   void mesh_callback(const visualization_msgs::msg::Marker& mesh)
+//   {
+// 
+//     RCLCPP_INFO(this->get_logger(), "Received idustrial reconstruction mesh %d", counter);
+// 
+//     // Convert points from marker to mesh vertices
+//     collision_mesh_.vertices.clear();
+//     for (const auto& point : mesh.points) {
+//         geometry_msgs::msg::Point vertex;
+//         vertex = point;  // Direct assignment of points
+//         collision_mesh_.vertices.push_back(vertex);
+//     }
+// 
+//     // Create triangles from points (assuming points are arranged in triangles)
+//     collision_mesh_.triangles.clear();
+//     for (size_t i = 0; i < mesh.points.size(); i += 3) {
+//         shape_msgs::msg::MeshTriangle triangle;
+//         triangle.vertex_indices[0] = i;
+//         triangle.vertex_indices[1] = i + 1;
+//         triangle.vertex_indices[2] = i + 2;
+//         collision_mesh_.triangles.push_back(triangle);
+//     }
+// 
+//     collision_object.header.frame_id = "world";
+//     collision_object.id = "object_" + std::to_string(counter);
+// 
+//     collision_object.meshes.push_back(collision_mesh_);
+//     collision_object.mesh_poses.push_back(mesh.pose);
+//     collision_object.operation = collision_object.ADD;
+//     planning_scene_interface.applyCollisionObject(collision_object);
+//     counter++;
+//     
+//   }
 //  void octomap_callback(const octomap_msgs::msg::Octomap::SharedPtr msg)
 //  {
 //    RCLCPP_INFO(this->get_logger(), "Received Octomap");
@@ -299,7 +299,7 @@ private:
         moveit::planning_interface::MoveGroupInterface::Plan my_plan;
         std::string target_name = goal->state;
         move_group_interface_->setNamedTarget(target_name);
-        bool success = (move_group_interface_->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+        bool success = (move_group_interface_->plan(my_plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
         if (success) {
             move_group_interface_->execute(my_plan);
         } else {

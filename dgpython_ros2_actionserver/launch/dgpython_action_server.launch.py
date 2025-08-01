@@ -95,11 +95,13 @@ from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import PathJoinSubstitution, Command, FindExecutable, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
+from ur_moveit_config.launch_common import load_yaml
 
 launch_d415 = LaunchConfiguration("launch_d415")
 launch_azure = LaunchConfiguration("launch_azure")
 launch_keyence = LaunchConfiguration("launch_keyence")
 launch_zed = LaunchConfiguration("launch_zed")
+launch_ut = LaunchConfiguration("launch_keyence")
 tooling = LaunchConfiguration("tooling")
 
 def get_robot_description():
@@ -167,6 +169,9 @@ def get_robot_description():
             "launch_keyence:=",
             launch_keyence,
             " ",
+            "launch_ut:=",
+            "false",
+            " ",
             "launch_zed:=",
             launch_zed,
         ]
@@ -193,7 +198,7 @@ def get_robot_description_semantic():
             "",
             " ",
             "tooling:=",
-            "new",
+            tooling,
             " ",
             "launch_d415:=",
             launch_d415,
@@ -203,6 +208,9 @@ def get_robot_description_semantic():
             " ",
             "launch_keyence:=",
             launch_keyence,
+            " ",
+            "launch_ut:=",
+            "false",
             " ",
             "launch_zed:=",
             launch_zed,
@@ -215,6 +223,13 @@ def get_robot_description_semantic():
     return robot_description_semantic
     
 def generate_launch_description():
+    # Octomap Configuration
+    # octomap_config = {"sensors_3d": load_yaml("tari_ur_launch", 'config/sensor_3d.yaml')}
+    octomap_config = {'octomap_frame': 'azure_rgb', 
+                      'octomap_resolution': 0.01,
+                      'max_range': 5.0}
+
+    octomap_updater_config = load_yaml('tari_ur_launch', 'config/sensor_3d.yaml')
     # generate_common_hybrid_launch_description() returns a list of nodes to launch
     robot_description = get_robot_description()
     robot_description_semantic = get_robot_description_semantic()
@@ -226,6 +241,8 @@ def generate_launch_description():
         parameters=[
             robot_description,
             robot_description_semantic,
+            octomap_config,
+            octomap_updater_config,
         ],
         #prefix=['xterm -e gdb -ex run --args']
     )
@@ -260,10 +277,17 @@ def generate_launch_description():
         )
     )
     declared_arguments.append(
+        DeclareLaunchArgument(
+            "launch_ut",
+            default_value="false",
+            description="Launch flex ut setup",
+        )
+    )
+    declared_arguments.append(
         DeclareLaunchArgument("tooling",
-                              default_value="new",
-                              description="End of Arm Tooling Choice (old/new)",
-                              choices=["old", "new"])
+                              default_value="newer",
+                              description="End of Arm Tooling Choice (old/new/newer)",
+                              choices=["old", "new", "newer"])
     )
 
 
