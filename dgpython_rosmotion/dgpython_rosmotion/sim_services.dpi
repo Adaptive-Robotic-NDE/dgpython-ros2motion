@@ -1,0 +1,85 @@
+
+from tari_interfaces.srv import  (
+    StartKeyRec,
+    StopKeyRec,
+    Segmentor,
+    FixedAxisNoetherPlanner,
+    PrincipalAxisNoetherPlanner,
+    TariMeshFilter,
+    X3dConverter,
+    ReconstructMesh
+)
+from tari_interfaces.action import PoseArrayHandler, KeyenceReconstruction
+from industrial_reconstruction_msgs.srv import StartReconstruction, StopReconstruction
+from ur_msgs.srv import SetIO
+from moveit_msgs.action import HybridPlanner
+from std_srvs.srv import SetBool, Trigger
+
+# ros  = None
+
+global fixed_axis_noether_client, principal_axis_noether_client, start_reconstruction, stop_reconstruction, motion_client, mesh_filter_client
+global keyence_start, keyence_stop, gpio_client, zed_map_client, segmentor_client, x3d_converter_client, yolo_enable_client
+global hybrid_client, reconstruct_mesh, reconstruction_start, reconstruction_stop
+
+fixed_axis_noether_client = ros.clientCreation(False, FixedAxisNoetherPlanner, 'fixed_axis_noether')
+fixed_axis_noether_client.registerInterface('FixedAxisNoetherPlanner', FixedAxisNoetherPlanner)
+
+principal_axis_noether_client = ros.clientCreation(False, PrincipalAxisNoetherPlanner, 'principal_axis_noether')
+principal_axis_noether_client.registerInterface('PrincipalAxisNoetherPlanner', PrincipalAxisNoetherPlanner)
+
+start_reconstruction = ros.clientCreation(False, StartReconstruction, 'start_reconstruction')
+start_reconstruction.registerInterface('StartReconstruction', StartReconstruction)
+
+stop_reconstruction = ros.clientCreation(False, StopReconstruction, 'stop_reconstruction')
+stop_reconstruction.registerInterface('StopReconstruction', StopReconstruction)
+
+mesh_filter_client = ros.clientCreation(False, TariMeshFilter, 'tari_mesh_filter')
+mesh_filter_client.registerInterface('TariMeshFilter', TariMeshFilter)
+
+motion_client = ros.clientCreation(True, PoseArrayHandler, 'pose_array_action')
+motion_client.registerInterface('PoseArrayHandler', PoseArrayHandler)
+
+keyence_start = ros.clientCreation(False, StartKeyRec, 'start_key_rec')
+keyence_start.registerInterface('StartKeyRec', StartKeyRec)
+
+keyence_stop = ros.clientCreation(False, StopKeyRec, 'stop_key_rec')
+keyence_stop.registerInterface('StopKeyRec', StopKeyRec)
+
+# gpio_client = ros.clientCreation(False, SetIO, '/io_and_status_controller/set_io')
+# gpio_client.registerInterface('SetIO', SetIO)
+
+reconstruct_mesh = ros.clientCreation(True, KeyenceReconstruction, 'reconstruct_mesh')
+reconstruct_mesh.registerInterface('KeyenceReconstruction', KeyenceReconstruction)
+
+reconstruction_start = ros.clientCreation(False, Trigger, '/start_recording')
+reconstruction_start.registerInterface('Trigger', Trigger)
+
+reconstruction_stop = ros.clientCreation(False, ReconstructMesh, '/stop_and_process')
+reconstruction_stop.registerInterface('ReconstructMesh', ReconstructMesh)
+
+# segmentor_client = ros.clientCreation(False, Segmentor, 'segmentor')
+# segmentor_client.registerInterface('Segmentor', Segmentor)
+
+x3d_converter_client = ros.clientCreation(False, X3dConverter, 'x3d_converter')
+x3d_converter_client.registerInterface('X3dConverter', X3dConverter)
+
+yolo_enable_client = ros.clientCreation(False, SetBool, '/yolo/enable')
+yolo_enable_client.registerInterface('SetBool', SetBool)
+
+# hybrid_client = ros.clientCreation(True, HybridPlanner, '/test/hybrid_planning/run_hybrid_planning')
+# hybrid_client.registerInterface('HybridPlanner', HybridPlanner)
+
+# azure_client = ros.clientCreation(False, AzureFovScaler, 'azure_fov_scaler')
+# azure_client.registerInterface('AzureFovScaler', AzureFovScaler)
+
+
+# include(dgpython_rosmotion, 'services.dpi')
+
+# noether_client.sendRequest('TariNoether', {'mesh_filename': 'FileName.ply', 'line_spacing': 0.005, 'point_spacing': 0.005 })
+
+# start_reconstruction.registerMessage('RGBDImageParams', {'depth_scale':depth_scale,'depth_trunc':depth_trunc, 'convert_rgb_to_intensity':convert_rgb_to_intensity})
+# start_reconstruction.registerMessage('TSDFVolumeParams', {'voxel_length':voxel_length,'sdf_trunc':sdf_trunc, 'min_box_values':min_box_values, 'max_box_values':max_box_values})
+# start_reconstruction.sendRequest('StartReconstruction', {'tracking_frame':tracking_frame, 'relative_frame':relative_frame, 'translation_distance':translation_distance, 'rotational_distance':rotational_distance, 'live':live})
+
+# stop_reconstruction.registerMessage('NormalFilterParams', {'normal_direction':normal_direction,'angle':angle})
+# stop_reconstruction.sendRequest('StopReconstruction', {'archive_directory':archive_directory, 'mesh_filepath':mesh_filepath})
