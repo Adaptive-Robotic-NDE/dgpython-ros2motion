@@ -262,12 +262,21 @@ class motion(Node, metaclass=dgpy_Module):
             self.eoat_mesh = eoat_mesh
             self.eoat_model_tree = '/graphics/probe/'
             self.eoat_pose_channel = '/probe_pose'
+            self.graphicsgroup = self.recdb.define_channel('/graphics/', 'main', False, self.graphman)
             transact = self.recdb.start_transaction()
-            self.graphicsgroup = self.recdb.define_channel('/graphics/', 'main', self.recdb.raw(), False, self.graphman)
-            self.eoat_recording = snde.x3d_load_geometry(self.recdb, self.graphman, self.eoat_mesh, 0, 'main', self.recdb.raw(), self.eoat_model_tree, None, ['reindex_vertices', 'reindex_tex_vertices'])
-            self.eoat_pose_chan = self.recdb.define_channel(self.eoat_pose_channel, "main", self.recdb.raw())
-            self._NewEOATPositionInTransaction(snde.snde_invalid_orientation3())
+            self.eoat_recording = snde.x3d_load_geometry(
+                transact,
+                self.graphman,
+                self.eoat_mesh,
+                0,
+                'main',
+                self.eoat_model_tree,
+                None,
+                ['reindex_vertices', 'reindex_tex_vertices']
+                )
             transact.end_transaction()
+            self.eoat_pose_chan = self.recdb.define_channel(self.eoat_pose_channel, "main")
+            self._NewEOATPositionInTransaction(snde.snde_invalid_orientation3())
 
             
         else:
@@ -323,19 +332,31 @@ class motion(Node, metaclass=dgpy_Module):
         return
 
     def specimenMesh(self,x=0,y=0,z=0,ox=0,oy=0,oz=0,ow=1,specimen_mesh=None):
+
+        # Increment counter after first specimen
         if specimen_mesh is not None:
             self.counter += 1
             self.specimen_model_file.append(specimen_mesh)
             self.specimen_model_tree.append('/graphics/specimen_' + str(self.counter) + '/')
             self.specimen_pose_channel.append('/specimen_' + str(self.counter) + '_pose')
             try:
-                transact = self.recdb.start_transaction()
                 self.specimen_data_channel.append("/specimen_" + str(self.counter) + "_data")
-                self.specimen_data_chan.append(self.recdb.define_channel(self.specimen_data_channel[self.counter-1],"main",self.recdb.raw()))
-                self.specimen_recording = snde.x3d_load_geometry(self.recdb, self.graphman, self.specimen_model_file[self.counter-1], 0, 'main', self.recdb.raw(), self.specimen_model_tree[self.counter-1], None, ['reindex_vertices', 'reindex_tex_vertices'] + snde.project_onto_parameterization_processing_tags)
-                self.specimen_pose_chan.append(self.recdb.define_channel(self.specimen_pose_channel[self.counter-1], "main", self.recdb.raw()))
+                self.specimen_data_chan.append(self.recdb.define_channel(self.specimen_data_channel[self.counter-1],"main"))
+                transact = self.recdb.start_transaction()
+                self.specimen_recording = snde.x3d_load_geometry(
+                    transact,
+                    self.graphman,
+                    self.specimen_model_file[self.counter-1],
+                    0,
+                    'main',
+                    self.specimen_model_tree[self.counter-1],
+                    None,
+                    ['reindex_vertices', 'reindex_tex_vertices'] + snde.project_onto_parameterization_processing_tags
+                    )
+                transact.end_transaction()
+                self.specimen_pose_chan.append(self.recdb.define_channel(self.specimen_pose_channel[self.counter-1], "main"))
                 self.positioner_channel.append("/probe_and_specimen_" + str(self.counter))
-                self.positioner_chan.append(self.recdb.define_channel(self.positioner_channel[self.counter-1],"main",self.recdb.raw()))            
+                self.positioner_chan.append(self.recdb.define_channel(self.positioner_channel[self.counter-1],"main"))            
                 f = math.sqrt(ow*ow + 
                               ox*ox + 
                               oy*oy + 
@@ -354,9 +375,10 @@ class motion(Node, metaclass=dgpy_Module):
                                                    z,
                                                    0),(q[0],q[1],q[2],q[3])),dtype=orient_dtype))
                 self._SpecimenPosition(self.specimen_position[self.counter-1], self.specimen_model_tree[self.counter-1], self.specimen_pose_chan[self.counter-1])
-            finally:
-                transact.end_transaction()
-                # self.join(specimenNum=self.counter)
+            
+            except Exception as e:
+
+                self.get_logger().info(f"{e}", once=True)
 
         else:
             self.specimen_mesh = None
@@ -394,17 +416,20 @@ class motion(Node, metaclass=dgpy_Module):
 
 
     def _SpecimenPosition(self, orientation, tree, chan):
-        specimen_pose_ref = snde.create_pose_channel_ndarray_ref(self.recdb, chan, self.recdb.raw(), snde.recdb_path_join(tree, "meshed"))
+        transact = self.recdb.start_transaction()
+        specimen_pose_ref = snde.create_pose_channel_ndarray_ref(transact, chan, snde.recdb_path_join(tree, "meshed"))
         specimen_pose_ref.allocate_storage([1])
-        specimen_pose_ref.data()[0] = orientation
+        specimen_pose_ref.data[0] = orientation
         specimen_pose_ref.rec.mark_metadata_done()
         specimen_pose_ref.rec.mark_data_ready()
+        transact.end_transaction()
 
     def _NewEOATPositionInTransaction(self, orientation):
-        eoat_pose_ref = snde.create_pose_channel_ndarray_ref(self.recdb, self.eoat_pose_chan, self.recdb.raw(), snde.recdb_path_join(self.eoat_model_tree, "meshed"))
+        transact = self.recdb.start_transaction()
+        eoat_pose_ref = snde.create_pose_channel_ndarray_ref(transact, self.eoat_pose_chan, snde.recdb_path_join(self.eoat_model_tree, "meshed"))
         eoat_pose_ref.allocate_storage([1])
         # eoat_pose_rec = snde.pose_channel_recording.from_ndarray_recording(eoat_pose_ref.rec)
-        eoat_pose_ref.data()[0] = orientation
+        eoat_pose_ref.data[0] = orientation
         eoat_pose_ref.rec.mark_metadata_done()
         eoat_pose_ref.rec.mark_data_ready()
         try:
@@ -413,10 +438,14 @@ class motion(Node, metaclass=dgpy_Module):
             if self.counter:
                 for i in range(self.counter):
                     vsop = snde.VectorOfStringOrientationPairs([snde.StringOrientationPair('/graphics/specimen_'+ str(i+1) +'/meshed',snde.snde_orientation3(self.specimen_position[i])), snde.StringOrientationPair('/graphics/probe/meshed',snde.snde_orientation3(self.probe_position))])
-                    rec = snde.create_assembly_recording(self.recdb, self.positioner_chan[i], self.recdb.raw(), vsop)
+                    rec = snde.create_assembly_recording(transact, self.positioner_chan[i], vsop)
                     rec.mark_data_and_metadata_ready()
         except Exception as e:
             self.get_logger().info(f"{Colors.RED}{e}{Colors.RESET}", once=True)
+
+        finally:
+            transact.end_transaction()
+
 
     def Stop(self):
         self.get_logger().info('Canceling goal...')
@@ -432,12 +461,14 @@ class motion(Node, metaclass=dgpy_Module):
             self.get_logger().info('Goal failed to cancel')
 
 
-    def Move(self, msg, vel=0.1, acc=0.1):
+    def Move(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
 
         goal_msg = DgPython.Goal()
         
         goal_msg.velocity = vel
         goal_msg.acceleration = acc
+        goal_msg.ik_frame = ik_frame
+
 
         if isinstance(msg, Pose):
             goal_msg.destination = msg
@@ -607,7 +638,6 @@ class motion(Node, metaclass=dgpy_Module):
                                   self.t.transform.rotation.z/d])
 
 
-                transact = self.recdb.start_transaction()
                 if self.eoat_mesh is not None:
                     self._NewEOATPositionInTransaction(np.array(((self.t.transform.translation.x,
                                                                   self.t.transform.translation.y,
@@ -625,7 +655,6 @@ class motion(Node, metaclass=dgpy_Module):
                                 self.join(specimenNum=i+1)
                 except Exception as e:
                     self.get_logger().info(f"{e}", once=True)
-                transact.end_transaction()
             except TransformException as ex:
                 self.get_logger().info(f'Could not transform {self.to_frame_rel} to {self.from_frame_rel}: {ex}', once=True)
 

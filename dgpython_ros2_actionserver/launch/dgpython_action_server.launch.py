@@ -95,6 +95,7 @@ from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import PathJoinSubstitution, Command, FindExecutable, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterFile
 from ur_moveit_config.launch_common import load_yaml
 
 launch_d415 = LaunchConfiguration("launch_d415")
@@ -233,6 +234,15 @@ def generate_launch_description():
     # generate_common_hybrid_launch_description() returns a list of nodes to launch
     robot_description = get_robot_description()
     robot_description_semantic = get_robot_description_semantic()
+
+    # Load the kinematics.yaml file and flatten it to avoid parameter name mangling
+    # that occurs with nested dictionaries in ROS 2 launch.
+    kinematics_yaml = load_yaml("ur_moveit_config", "config/kinematics.yaml")
+    robot_description_kinematics = {}
+    for group_name, group_params in kinematics_yaml.items():
+        for param_name, param_value in group_params.items():
+            robot_description_kinematics[f"robot_description_kinematics.{group_name}.{param_name}"] = param_value
+
     demo_node = Node(
         package="dgpython_ros2_actionserver",
         executable="dgpython_action_server",
@@ -241,6 +251,7 @@ def generate_launch_description():
         parameters=[
             robot_description,
             robot_description_semantic,
+            robot_description_kinematics,
             octomap_config,
             octomap_updater_config,
         ],

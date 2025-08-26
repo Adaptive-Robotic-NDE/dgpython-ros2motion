@@ -61,6 +61,7 @@ geometry_msgs/PoseArray pose_array
 float32 velocity
 float32 acceleration
 string state
+string ik_frame
 ---
 # Result
 bool success
