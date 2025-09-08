@@ -211,11 +211,11 @@ class motion(Node, metaclass=dgpy_Module):
     def __init__(self, module_name, recdb, from_frame_rel, to_frame_rel, eoat_mesh=None, depth_image_topic='/depth_to_rgb/image_raw', **kwargs):
         super().__init__('dataguzzler_frame_publisher')
         self.get_logger().info("Dataguzzler Frame Publisher Module Starting")
-        self.pose_pub = self.create_publisher(PoseArray, 'pose_array', 10)
-        self.coordinate_pub = self.create_publisher(PoseArray, 'coordinate_array', 10)
-        self.center_pub = self.create_publisher(PoseArray, 'center_array', 10)
-        self.yolo_pub = self.create_publisher(PoseArray, 'yolo_array', 10)
-        self.recon_pose_pub = self.create_publisher(PoseArray, 'recon_pose_array', 10)
+        self.laser_scan_array_pub = self.create_publisher(PoseArray, 'laser_scan_array', 10)
+        self.angled_corners_pub = self.create_publisher(PoseArray, '/yolo_poses/angled_corners_array', 10)
+        self.coarse_scan_pub = self.create_publisher(PoseArray, 'coarse_scan_array', 10)
+        self.object_detection_pub = self.create_publisher(PoseArray, '/yolo_poses/object_detection_array', 10)
+        self.dome_pose_pub = self.create_publisher(PoseArray, 'dome_pose_array', 10)
         self.gpio_sub = self.create_subscription(IOStates, '/io_and_status_controller/io_states', self.gpio_callback, 10)
         self.detect_sub = self.create_subscription(DetectionArray, '/yolo/detections', self.detection_callback, 10)
         self.tracking_sub = self.create_subscription(DetectionArray, '/yolo/tracking', self.tracking_callback, 10)
@@ -224,7 +224,6 @@ class motion(Node, metaclass=dgpy_Module):
         self.click_sub = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
         self.bridge = CvBridge()
         self.gpio_sub
-        self.counter = 0
         self.detections = DetectionArray()
         self.tracked_detections = DetectionArray()
         self.svd_msg = IOStates()
@@ -233,8 +232,8 @@ class motion(Node, metaclass=dgpy_Module):
         self.click_msg.header.frame_id = to_frame_rel
         self.pose_array = PoseArray()
         self.pose_array.header.frame_id = to_frame_rel
-        self.center_array = PoseArray()
-        self.center_array.header.frame_id = to_frame_rel
+        self.coarse_array = PoseArray()
+        self.coarse_array.header.frame_id = to_frame_rel
         self.coordinate_array = PoseArray()
         self.coordinate_array.header.frame_id = to_frame_rel
         self.yolo_array = PoseArray()
@@ -245,17 +244,27 @@ class motion(Node, metaclass=dgpy_Module):
         self.to_frame_rel = to_frame_rel
         self.t = TransformStamped()
         self.desired_t = None
-        self.specimen_pose_channel = []
-        self.specimen_model_file = []
-        self.specimen_model_tree = []
-        self.specimen_data_channel = []
-        self.specimen_data_chan = []
-        self.specimen_pose_chan = []
-        self.positioner_channel = []
-        self.specimen_position = []
-        self.positioner_chan = []
+        self.specimen_pose_channel = '/specimen_pose'
+        self.specimen_pose_channel_copy = '/specimen_pose_copy'
+        self.specimen_model_file = None
+        self.specimen_model_tree = '/graphics/specimen/'
+        self.specimen_data_channel = '/specimen_data'
+        self.specimen_data_chan = None
+        self.specimen_pose_chan = None
+        self.specimen_model_tree_copy = None
+        self.specimen_pose_channel_copy = None
+        self.positioner_channel = '/probe_and_specimen'
+        self.specimen_position = None
+        self.positioner_chan = None
         self.probe_position = None
         self.recdb = recdb
+
+        self.specimen_data_chan = self.recdb.define_channel(self.specimen_data_channel,"main")
+        self.specimen_pose_chan = self.recdb.define_channel(self.specimen_pose_channel,"main")
+        self.specimen_model_tree_copy = recdb.define_channel('/graphics/specimen_copy/', "main")
+        self.specimen_pose_channel_copy = recdb.define_channel('/specimen_pose_copy', "main")
+        self.positioner_chan = self.recdb.define_channel(self.positioner_channel,"main")
+        
         self.graphman = snde.graphics_storage_manager("/graphics/", self.recdb.lowlevel_alloc, self.recdb.alignment_requirements,self.recdb.lockmgr, 1e-8, 2000000000)
 
         if eoat_mesh is not None:
@@ -333,30 +342,27 @@ class motion(Node, metaclass=dgpy_Module):
 
     def specimenMesh(self,x=0,y=0,z=0,ox=0,oy=0,oz=0,ow=1,specimen_mesh=None):
 
-        # Increment counter after first specimen
-        if specimen_mesh is not None:
-            self.counter += 1
-            self.specimen_model_file.append(specimen_mesh)
-            self.specimen_model_tree.append('/graphics/specimen_' + str(self.counter) + '/')
-            self.specimen_pose_channel.append('/specimen_' + str(self.counter) + '_pose')
-            try:
-                self.specimen_data_channel.append("/specimen_" + str(self.counter) + "_data")
-                self.specimen_data_chan.append(self.recdb.define_channel(self.specimen_data_channel[self.counter-1],"main"))
+        try:
+
+            if specimen_mesh is not None:
+
+                self.specimen_model_file = specimen_mesh
+
                 transact = self.recdb.start_transaction()
+
                 self.specimen_recording = snde.x3d_load_geometry(
                     transact,
                     self.graphman,
-                    self.specimen_model_file[self.counter-1],
+                    self.specimen_model_file,
                     0,
                     'main',
-                    self.specimen_model_tree[self.counter-1],
+                    self.specimen_model_tree,
                     None,
                     ['reindex_vertices', 'reindex_tex_vertices'] + snde.project_onto_parameterization_processing_tags
                     )
+                
                 transact.end_transaction()
-                self.specimen_pose_chan.append(self.recdb.define_channel(self.specimen_pose_channel[self.counter-1], "main"))
-                self.positioner_channel.append("/probe_and_specimen_" + str(self.counter))
-                self.positioner_chan.append(self.recdb.define_channel(self.positioner_channel[self.counter-1],"main"))            
+
                 f = math.sqrt(ow*ow + 
                               ox*ox + 
                               oy*oy + 
@@ -364,32 +370,36 @@ class motion(Node, metaclass=dgpy_Module):
                 
                 q = self.quatRot([ow/f,ox/f,oy/f,oz/f])
 
-                try:
-                    self.specimen_position[self.counter-1] = np.array(((x,
-                                                   y,
-                                                   z,
-                                                   0),(q[0],q[1],q[2],q[3])),dtype=orient_dtype)
-                except:
-                    self.specimen_position.append(np.array(((x,
-                                                   y,
-                                                   z,
-                                                   0),(q[0],q[1],q[2],q[3])),dtype=orient_dtype))
-                self._SpecimenPosition(self.specimen_position[self.counter-1], self.specimen_model_tree[self.counter-1], self.specimen_pose_chan[self.counter-1])
+                f = math.sqrt(q[0]*q[0] + 
+                              q[1]*q[1] + 
+                              q[2]*q[2] + 
+                              q[3]*q[3])
+
+                self.specimen_position = np.array(((q[3],
+                                               q[0],
+                                               q[1],
+                                               q[2]),(x,
+                                               y,
+                                               z,
+                                               1)),dtype=orient_dtype)
+                
+                self._SpecimenPosition(self.specimen_position, self.specimen_model_tree, self.specimen_pose_chan)
+
+            else:
+                self.specimen_model_file = None
+
             
-            except Exception as e:
+        except Exception as e:
 
-                self.get_logger().info(f"{e}", once=True)
+            self.get_logger().info(f"{e}", once=True)
 
-        else:
-            self.specimen_mesh = None
+    def join(self, background_channel=None):
 
-    def join(self, background_channel=None, specimenNum=1):
+        if self.specimen_model_file is None: return
 
-        if self.counter == 0 : return print(f"{Colors.RED}No specimens available{Colors.RESET}")
+        if background_channel is None : background_channel=self.specimen_pose_channel
 
-        elif specimenNum-1 > self.counter : return print(f"{Colors.RED}Specimen index out of range{Colors.RESET}")
-
-        if background_channel is None : background_channel=self.specimen_pose_channel[specimenNum-1]
+        transact = self.recdb.start_transaction()
 
         model_channel=snde.recdb_path_join(self.eoat_model_tree,"meshed")
 
@@ -400,22 +410,32 @@ class motion(Node, metaclass=dgpy_Module):
         background_channel = str(background_channel)
         # print("Background Channel: %s" % background_channel)
 
-        self.probe_position = np.array(((self.t.transform.translation.x,
-                                    self.t.transform.translation.y,
-                                    self.t.transform.translation.z,
-                                    0),( 
+        self.probe_position = np.array((( 
+                                    self.arm_q[3],
                                     self.arm_q[0],
                                     self.arm_q[1],
-                                    self.arm_q[2],
-                                    self.arm_q[3])),
+                                    self.arm_q[2]),
+                                    (self.t.transform.translation.x,
+                                    self.t.transform.translation.y,
+                                    self.t.transform.translation.z,
+                                    1)),
                                   dtype=orient_dtype)
-        vsop = snde.VectorOfStringOrientationPairs([snde.StringOrientationPair('/graphics/specimen_'+ str(specimenNum) +'/meshed',snde.snde_orientation3(self.specimen_position[specimenNum-1])), snde.StringOrientationPair('/graphics/probe/meshed',snde.snde_orientation3(self.probe_position))])
-        rec = snde.create_assembly_recording(self.recdb, self.positioner_chan[specimenNum-1], self.recdb.raw(), vsop)
+        
+        vsop = snde.VectorOfStringOrientationPairs([snde.StringOrientationPair('/graphics/specimen/meshed',
+                                                                               snde.snde_orientation3(self.specimen_position)),
+                                                                               snde.StringOrientationPair('/graphics/probe/meshed',
+                                                                               snde.snde_orientation3(self.probe_position))])
+        rec = snde.create_assembly_recording(transact, self.positioner_chan, vsop)
+
         rec.mark_data_and_metadata_ready()
+
+        transact.end_transaction()
+
 
 
 
     def _SpecimenPosition(self, orientation, tree, chan):
+        self.get_logger().info("Specimen Position Set to: %s" % orientation, once=True)
         transact = self.recdb.start_transaction()
         specimen_pose_ref = snde.create_pose_channel_ndarray_ref(transact, chan, snde.recdb_path_join(tree, "meshed"))
         specimen_pose_ref.allocate_storage([1])
@@ -434,12 +454,13 @@ class motion(Node, metaclass=dgpy_Module):
         eoat_pose_ref.rec.mark_data_ready()
         try:
 
-            self.get_logger().info(f"{Colors.MAGENTA}There are {self.counter}(s) specimen{Colors.RESET}", once=True)
-            if self.counter:
-                for i in range(self.counter):
-                    vsop = snde.VectorOfStringOrientationPairs([snde.StringOrientationPair('/graphics/specimen_'+ str(i+1) +'/meshed',snde.snde_orientation3(self.specimen_position[i])), snde.StringOrientationPair('/graphics/probe/meshed',snde.snde_orientation3(self.probe_position))])
-                    rec = snde.create_assembly_recording(transact, self.positioner_chan[i], vsop)
-                    rec.mark_data_and_metadata_ready()
+            if self.specimen_model_file is not None:
+                vsop = snde.VectorOfStringOrientationPairs([snde.StringOrientationPair('/graphics/specimen/meshed',
+                                                                                       snde.snde_orientation3(self.specimen_position)),
+                                                                                       snde.StringOrientationPair('/graphics/probe/meshed',
+                                                                                       snde.snde_orientation3(self.probe_position))])
+                rec = snde.create_assembly_recording(transact, self.positioner_chan, vsop)
+                rec.mark_data_and_metadata_ready()
         except Exception as e:
             self.get_logger().info(f"{Colors.RED}{e}{Colors.RESET}", once=True)
 
@@ -496,7 +517,7 @@ class motion(Node, metaclass=dgpy_Module):
         elif isinstance(msg, list):
             goal_msg.pose_array.poses = msg
             goal_msg.pose_array.header.frame_id = "world"
-            self.pose_pub.publish(goal_msg.pose_array)
+            self.laser_scan_array_pub.publish(goal_msg.pose_array)
 
         elif isinstance(msg, str):
 
@@ -639,20 +660,19 @@ class motion(Node, metaclass=dgpy_Module):
 
 
                 if self.eoat_mesh is not None:
-                    self._NewEOATPositionInTransaction(np.array(((self.t.transform.translation.x,
+                    self._NewEOATPositionInTransaction(np.array(((
+                                                                  [self.arm_q[3]/d,
+                                                                  self.arm_q[0]/d,
+                                                                  self.arm_q[1]/d,
+                                                                  self.arm_q[2]/d]),
+                                                                  (self.t.transform.translation.x,
                                                                   self.t.transform.translation.y,
                                                                   self.t.transform.translation.z,
-                                                                  0),(
-                                                                  self.arm_q[0],
-                                                                  self.arm_q[1],
-                                                                  self.arm_q[2],
-                                                                  self.arm_q[3])),dtype=orient_dtype))
+                                                                  1)),dtype=orient_dtype))
                 try:
-                    if self.positioner_chan[self.counter-1]:
+                    if self.positioner_chan:
                         # self.get_logger().info(f'Poistioner channel {self.counter} found', throttle_duration_sec=3)
-                        if self.counter:
-                            for i in range(self.counter):
-                                self.join(specimenNum=i+1)
+                        self.join()
                 except Exception as e:
                     self.get_logger().info(f"{e}", once=True)
             except TransformException as ex:
@@ -700,7 +720,7 @@ class motion(Node, metaclass=dgpy_Module):
         
         return ret
        
-    def reconPoseArray(self, full_dome, x, y, rot=False, angle=12, length = 0.3, width = 0.15, x_pos = 0.655, y_pos = -0.1, z_pos = 0.946, x_offset=1, y_offset=1):
+    def domePoseArray(self, full_dome, x, y, rot=False, angle=12, length = 0.3, width = 0.15, x_pos = 0.655, y_pos = -0.1, z_pos = 0.946, x_offset=1, y_offset=1):
         recon_pose_array = PoseArray()
         recon_pose_array.header.frame_id = "world"
         x_unit = length/x
@@ -727,7 +747,7 @@ class motion(Node, metaclass=dgpy_Module):
                     pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
                 recon_pose_array.poses.append(pose)
         rclpy.logging.get_logger("recon_pose_array").info(f"Pose array has {len(recon_pose_array.poses)} poses")
-        self.recon_pose_pub.publish(recon_pose_array)
+        self.dome_pose_pub.publish(recon_pose_array)
         return recon_pose_array
      
     def addPose(self, pose):
@@ -777,21 +797,21 @@ class motion(Node, metaclass=dgpy_Module):
         # print(f"Pose array is now:\n\n{self.pose_array}\n")
 
 
-        return self.pose_pub.publish(self.pose_array)
+        return self.laser_scan_array_pub.publish(self.pose_array)
     
     def addCross(self, pose):
 
         if isinstance(pose, Pose):
-            self.center_array.poses.append(pose)
+            self.coarse_array.poses.append(pose)
         
         elif isinstance(pose, PoseArray):
-            self.center_array.poses = pose.poses
+            self.coarse_array.poses = pose.poses
 
         else:
             rclpy.logging.get_logger("Add Pose").error("Wrong type")
             return
         
-        return self.center_pub.publish(self.center_array)
+        return self.coarse_scan_pub.publish(self.coarse_array)
     
     
     def addCoordinate(self, pose):
@@ -806,7 +826,7 @@ class motion(Node, metaclass=dgpy_Module):
             rclpy.logging.get_logger("Add Pose").error("Wrong type")
             return
         
-        return self.coordinate_pub.publish(self.coordinate_array)
+        return self.angled_corners_pub.publish(self.coordinate_array)
     
     def addDetection(self, pose):
 
@@ -820,10 +840,10 @@ class motion(Node, metaclass=dgpy_Module):
             rclpy.logging.get_logger("Add Pose").error("Wrong type")
             return
         
-        return self.yolo_pub.publish(self.yolo_array)
+        return self.object_detection_pub.publish(self.yolo_array)
     
     def pubPoseArray(self, pose_array):
-        return self.pose_pub.publish(pose_array)
+        return self.laser_scan_array_pub.publish(pose_array)
 
     def SpinnerThread(self):
         InitCompatibleThread(self, "_spinner")
