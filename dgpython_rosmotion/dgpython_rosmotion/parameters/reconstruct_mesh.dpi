@@ -7,7 +7,7 @@ paramdb.AddParam(Parameter,
                 friendlyname="Output Filepath",
                 doc="Directory path and name for the output files. A timestamp will be added.",
                 group=keyence_reconstruction_group,
-                value="/data/tari_scan_data/Calibration Plate")
+                value="/data/tari_scan_data/Cylinder/Front Face")
 
 paramdb.AddParam(Parameter,
                 "base_filename",

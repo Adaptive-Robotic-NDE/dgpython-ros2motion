@@ -104,12 +104,15 @@ launch_keyence = LaunchConfiguration("launch_keyence")
 launch_zed = LaunchConfiguration("launch_zed")
 launch_ut = LaunchConfiguration("launch_keyence")
 tooling = LaunchConfiguration("tooling")
+prefix = LaunchConfiguration("prefix")
+tf_prefix = LaunchConfiguration("tf_prefix")
+ur_type = LaunchConfiguration("ur_type")
 
 def get_robot_description():
 
 
     joint_limit_params = PathJoinSubstitution(
-        [FindPackageShare("ur_description"), "config", "ur10e", "joint_limits.yaml"]
+        [FindPackageShare("ur_description"), "config", ur_type, "joint_limits.yaml"]
     )
     kinematics_params = PathJoinSubstitution(
         [FindPackageShare("tari_ur_launch"), "etc", "", "ex-ur10e-1_calibration.yaml"]
@@ -153,10 +156,10 @@ def get_robot_description():
             "ur",
             " ",
             "ur_type:=",
-            "ur10e",
+            ur_type,
             " ",
-            "prefix:=",
-            "",
+            "tf_prefix:=",
+            prefix,
             " ",
             "tooling:=",
             tooling,
@@ -196,7 +199,7 @@ def get_robot_description_semantic():
             "ur",
             " ",
             "prefix:=",
-            "",
+            prefix,
             " ",
             "tooling:=",
             tooling,
@@ -295,10 +298,36 @@ def generate_launch_description():
         )
     )
     declared_arguments.append(
+        DeclareLaunchArgument(
+            "prefix",
+            default_value="my_",
+            description="Prefix of the joint names, useful for \
+        multi-robot setup. If changed than also joint names in the controllers' configuration \
+        have to be updated.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "tf_prefix",
+            default_value="ur_",
+            description="tf_prefix of the joint names, useful for \
+        multi-robot setup. If changed, also joint names in the controllers' configuration \
+        have to be updated.",
+        )
+    )
+    declared_arguments.append(
         DeclareLaunchArgument("tooling",
                               default_value="newer",
                               description="End of Arm Tooling Choice (old/new/newer)",
                               choices=["old", "new", "newer"])
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "ur_type",
+            default_value="ur10e",
+            description="Type/series of used UR robot.",
+            choices=["ur3", "ur3e", "ur5", "ur5e", "ur10", "ur10e", "ur16e", "ur20e"],
+        )
     )
 
 

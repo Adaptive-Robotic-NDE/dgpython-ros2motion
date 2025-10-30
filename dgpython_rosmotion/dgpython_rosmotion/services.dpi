@@ -1,5 +1,6 @@
 
 from tari_interfaces.srv import  (
+    AprilRegister,
     StartKeyRec,
     StopKeyRec,
     Segmentor,
@@ -20,6 +21,10 @@ from std_srvs.srv import SetBool, Trigger
 global fixed_axis_noether_client, principal_axis_noether_client, start_reconstruction, stop_reconstruction, motion_client, mesh_filter_client
 global keyence_start, keyence_stop, gpio_client, zed_map_client, segmentor_client, x3d_converter_client, yolo_enable_client
 global hybrid_client, reconstruct_mesh, reconstruction_start, reconstruction_stop
+global cad_register
+
+cad_register = ros.clientCreation(False, AprilRegister, 'april_registration')
+cad_register.registerInterface('AprilRegister', AprilRegister)
 
 fixed_axis_noether_client = ros.clientCreation(False, FixedAxisNoetherPlanner, 'fixed_axis_noether')
 fixed_axis_noether_client.registerInterface('FixedAxisNoetherPlanner', FixedAxisNoetherPlanner)

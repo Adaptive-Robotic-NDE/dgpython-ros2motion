@@ -15,14 +15,14 @@ paramdb.AddParam(NumericUnitsParameter,
                 doc="Spacing between line of poses",
                 group=keyence_group,
                 units="m",
-                value=0.02)
+                value=0.005)
 paramdb.AddParam(NumericUnitsParameter,
                 keyence_prefix+"point_spacing",
                 friendlyname="Point Spacing",
                 doc="Spacing between points in line",
                 group=keyence_group,
                 units="m",
-                value=0.03)
+                value=0.01)
 paramdb.AddParam(NumericUnitsParameter,
                 keyence_prefix+"z_offset",
                 friendlyname="Z Offset",

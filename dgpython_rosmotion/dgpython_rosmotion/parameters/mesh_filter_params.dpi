@@ -28,7 +28,7 @@ paramdb.AddParam(NumericUnitsParameter,
                 doc="Vertex Z Value Cutoff",
                 group="Mesh Vert Filter",
                 units="",
-                value=1.0)
+                value=0.965)
 
 paramdb.AddParam(Parameter,
                 "delete_loose_parts",

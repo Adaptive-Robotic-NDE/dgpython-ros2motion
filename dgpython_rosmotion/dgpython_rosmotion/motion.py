@@ -80,6 +80,7 @@ from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped, WrenchStamped
 from geometry_msgs.msg import PointStamped, PoseArray, Pose, Quaternion, TransformStamped, Point
+from apriltag_msgs.msg import AprilTagDetectionArray
 from yolo_msgs.msg import DetectionArray
 from sensor_msgs.msg import Image
 from ur_msgs.msg import IOStates
@@ -216,12 +217,15 @@ class motion(Node, metaclass=dgpy_Module):
         self.coarse_scan_pub = self.create_publisher(PoseArray, 'coarse_scan_array', 10)
         self.object_detection_pub = self.create_publisher(PoseArray, '/yolo_poses/object_detection_array', 10)
         self.dome_pose_pub = self.create_publisher(PoseArray, 'dome_pose_array', 10)
+        self.probe_end_pub = self.create_publisher(TransformStamped, '/probe_end_transform', 10)
         self.gpio_sub = self.create_subscription(IOStates, '/io_and_status_controller/io_states', self.gpio_callback, 10)
         self.detect_sub = self.create_subscription(DetectionArray, '/yolo/detections', self.detection_callback, 10)
         self.tracking_sub = self.create_subscription(DetectionArray, '/yolo/tracking', self.tracking_callback, 10)
         self.depth_sub = self.create_subscription(Image, depth_image_topic, self.depth_image_callback, 10)
-        self.force_sub = self.create_subscription(WrenchStamped, '/force_torque_sensor_broadcaster/wrench', self.force_callback, 10)
+        self.force_sub = self.create_subscription(WrenchStamped, '/msg_sync/force_msg', self.force_callback, 10)
+        self.pos_sub = self.create_subscription(TransformStamped, '/msg_sync/position_msg', self.position_callback, 10)
         self.click_sub = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
+        self.tag_sub = self.create_subscription(AprilTagDetectionArray, '/rgb/tags', self.tag_callback, 10)
         self.bridge = CvBridge()
         self.gpio_sub
         self.detections = DetectionArray()
@@ -323,7 +327,10 @@ class motion(Node, metaclass=dgpy_Module):
         return
     
     def force_callback(self,msg):
-        self.force_msg = msg
+        self.sync_force_msg = msg
+
+    def position_callback(self,msg):
+        self.sync_pos_msg = msg
     
     def detection_callback(self, msg):
         self.detected = msg
@@ -331,6 +338,10 @@ class motion(Node, metaclass=dgpy_Module):
     
     def click_callback(self, msg):
         self.click_msg = msg
+        return
+    
+    def tag_callback(self, msg):
+        self.tags = msg
         return
     
     def depth_image_callback(self, msg):
@@ -446,7 +457,9 @@ class motion(Node, metaclass=dgpy_Module):
 
     def _NewEOATPositionInTransaction(self, orientation):
         transact = self.recdb.start_transaction()
-        eoat_pose_ref = snde.create_pose_channel_ndarray_ref(transact, self.eoat_pose_chan, snde.recdb_path_join(self.eoat_model_tree, "meshed"))
+        eoat_pose_ref = snde.create_pose_channel_ndarray_ref(transact,
+                                                             self.eoat_pose_chan,
+                                                             snde.recdb_path_join(self.eoat_model_tree, "meshed"))
         eoat_pose_ref.allocate_storage([1])
         # eoat_pose_rec = snde.pose_channel_recording.from_ndarray_recording(eoat_pose_ref.rec)
         eoat_pose_ref.data[0] = orientation
@@ -455,10 +468,11 @@ class motion(Node, metaclass=dgpy_Module):
         try:
 
             if self.specimen_model_file is not None:
-                vsop = snde.VectorOfStringOrientationPairs([snde.StringOrientationPair('/graphics/specimen/meshed',
-                                                                                       snde.snde_orientation3(self.specimen_position)),
-                                                                                       snde.StringOrientationPair('/graphics/probe/meshed',
-                                                                                       snde.snde_orientation3(self.probe_position))])
+                vsop = snde.VectorOfStringOrientationPairs(
+                    [snde.StringOrientationPair('/graphics/specimen/meshed',
+                        snde.snde_orientation3(self.specimen_position)),
+                        snde.StringOrientationPair('/graphics/probe/meshed',
+                        snde.snde_orientation3(self.probe_position))])
                 rec = snde.create_assembly_recording(transact, self.positioner_chan, vsop)
                 rec.mark_data_and_metadata_ready()
         except Exception as e:
@@ -615,7 +629,7 @@ class motion(Node, metaclass=dgpy_Module):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
-        r = self.create_rate(30)
+        r = self.create_rate(200)
 
         while not self._quit:
             if self._pause == True:
@@ -630,6 +644,8 @@ class motion(Node, metaclass=dgpy_Module):
                         self.to_frame_rel,
                         self.from_frame_rel,
                         rclpy.time.Time())
+                
+                self.probe_end_pub.publish(self.t)
                 
                 self.azure_t = self._tf_buffer.lookup_transform(
                         self.to_frame_rel,
