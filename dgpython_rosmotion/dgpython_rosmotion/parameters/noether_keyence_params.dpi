@@ -15,7 +15,7 @@ paramdb.AddParam(NumericUnitsParameter,
                 doc="Spacing between line of poses",
                 group=keyence_group,
                 units="m",
-                value=0.005)
+                value=0.01)
 paramdb.AddParam(NumericUnitsParameter,
                 keyence_prefix+"z_offset",
                 friendlyname="Z Offset",
@@ -31,30 +31,18 @@ paramdb.AddParam(NumericUnitsParameter,
                 units="m",
                 value=0.1)
 paramdb.AddParam(Parameter,
-                keyence_prefix+"set_orientation",
-                friendlyname="Set Orientation",
-                doc="",
-                group=keyence_group,
-                value=True)
-paramdb.AddParam(Parameter,
                 keyence_prefix+"snake",
                 friendlyname="Snake Plan Modifier",
                 doc="",
                 group=keyence_group,
                 value=True)
-paramdb.AddParam(Parameter,
-                keyence_prefix+"lock_z",
-                friendlyname="Lock Z Axis Rotation",
-                doc="",
-                group=keyence_group,
-                value=False)
 paramdb.AddParam(NumericUnitsParameter,
                 keyence_prefix+"orientation",
                 friendlyname="Orientation",
                 doc="",
                 group=keyence_group,
                 units="deg",
-                value=(0.0,0.0,0.0))
+                value=(1.0,0.0,0.0))
 paramdb.AddParam(NumericUnitsParameter,
                 keyence_prefix+"origin",
                 friendlyname="Origin Generator",
