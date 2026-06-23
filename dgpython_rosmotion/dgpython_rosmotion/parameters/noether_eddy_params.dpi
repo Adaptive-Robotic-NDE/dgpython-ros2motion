@@ -17,6 +17,13 @@ paramdb.AddParam(NumericUnitsParameter,
                 units="m",
                 value=0.001)
 paramdb.AddParam(NumericUnitsParameter,
+                eddy_prefix+"point_spacing",
+                friendlyname="Point Spacing",
+                doc="Spacing between individual poses",
+                group=eddy_group,
+                units="m",
+                value=0.001)
+paramdb.AddParam(NumericUnitsParameter,
                 eddy_prefix+"z_offset",
                 friendlyname="Z Offset",
                 doc="",

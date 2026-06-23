@@ -1,4 +1,4 @@
-from moveit_task_constructor import core, stages
+from moveit.task_constructor import core, stages
 
 def get_plan_to_state_stage(node, group_name, state_name):
     """Returns a Stage to move the arm to a named SRDF state."""

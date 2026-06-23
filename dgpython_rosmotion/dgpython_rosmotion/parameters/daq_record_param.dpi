@@ -1,0 +1,9 @@
+
+    ###DAQ Record###
+    
+paramdb.AddParam(Parameter,
+                 "start_recording",
+                 friendlyname="Start Recording NDI Data",
+                 doc="",
+                 group="DAQ Record Data",
+                 value=False)

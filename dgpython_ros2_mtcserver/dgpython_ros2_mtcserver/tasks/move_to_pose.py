@@ -1,4 +1,4 @@
-from moveit_task_constructor import core, stages
+from moveit.task_constructor import core, stages
 from geometry_msgs.msg import PoseStamped
 
 def create_detection_move_task(node, group_name, target_pose: PoseStamped):

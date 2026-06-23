@@ -21,7 +21,13 @@ from std_srvs.srv import SetBool, Trigger
 global fixed_axis_noether_client, principal_axis_noether_client, start_reconstruction, stop_reconstruction, motion_client, mesh_filter_client
 global keyence_start, keyence_stop, gpio_client, zed_map_client, segmentor_client, x3d_converter_client, yolo_enable_client
 global hybrid_client, reconstruct_mesh, reconstruction_start, reconstruction_stop
-global cad_register
+global cad_register, start_daq_record_client, stop_daq_record_client
+
+start_daq_record_client = ros.clientCreation(False, Trigger, 'start_daq_rec')
+start_daq_record_client.registerInterface('Trigger', Trigger)
+
+stop_daq_record_client = ros.clientCreation(False, Trigger, 'stop_daq_rec')
+stop_daq_record_client.registerInterface('Trigger', Trigger)
 
 cad_register = ros.clientCreation(False, AprilRegister, 'april_registration')
 cad_register.registerInterface('AprilRegister', AprilRegister)

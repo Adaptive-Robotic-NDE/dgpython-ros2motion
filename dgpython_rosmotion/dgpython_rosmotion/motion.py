@@ -74,15 +74,16 @@ import rclpy.logging
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from dgpython_ros2_actioninterface.action import DgPython
+from tari_interfaces.action import RasterScan, JointMove, PipelineMove
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped, WrenchStamped
-from geometry_msgs.msg import PointStamped, PoseArray, Pose, Quaternion, TransformStamped, Point
+from geometry_msgs.msg import PointStamped, PoseArray, Pose, Quaternion, TransformStamped, Point, PoseStamped
 from apriltag_msgs.msg import AprilTagDetectionArray
 from yolo_msgs.msg import DetectionArray
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 from ur_msgs.msg import IOStates
 from threading import RLock
 from typing import Any
@@ -170,11 +171,12 @@ class client(object):
         goal_handle = await future
         return goal_handle
 
-    def sendRequest(self, interface, options):
+    def sendRequest(self, interface, options=None):
         req = self.interfaces[interface].Request()
-        for key in options:
-            setattr(req, key, options[key])
-            print(f"Setting {key} to {options[key]}")
+        if options:
+            for key in options:
+                setattr(req, key, options[key])
+                print(f"Setting {key} to {options[key]}")
         future = self.client.call_async(req)
         while not future.done():
             time.sleep(0.01)
@@ -209,7 +211,7 @@ class motion(Node, metaclass=dgpy_Module):
     #'AcquisitionType': ('Specifies continuous or finite sampling -- Valid options are "CONTINUOUS" or "FINITE"', const.AcquisitionType.FINITE, lambda val: {"CONTINUOUS": const.AcquisitionType.CONTINUOUS, "FINITE": const.AcquisitionType.FINITE}[val], lambda val: {const.AcquisitionType.CONTINUOUS: 'CONTINUOUS', const.AcquisitionType.FINITE: 'FINITE'}[val], lambda val: {const.AcquisitionType.CONTINUOUS: 'CONTINUOUS', const.AcquisitionType.FINITE: 'FINITE'}[val], lambda val: snde.metadatum('daq_params-AcquisitionType', val)),
     #'SampsPerChan': ('Number of Data Points Per Channel', 100, lambda val: val, lambda val: val, lambda val: val, lambda val: snde.metadatum('daq_params-SampsPerChan', val))}
 
-    def __init__(self, module_name, recdb, from_frame_rel, to_frame_rel, eoat_mesh=None, depth_image_topic='/depth_to_rgb/image_raw', **kwargs):
+    def __init__(self, module_name, recdb, from_frame_rel, to_frame_rel, eoat_mesh=None, depth_image_topic='/azure/depth/image_raw', camera_info='/azure/rgb/camera_info', **kwargs):
         super().__init__('dataguzzler_frame_publisher')
         self.get_logger().info("Dataguzzler Frame Publisher Module Starting")
         self.laser_scan_array_pub = self.create_publisher(PoseArray, 'laser_scan_array', 10)
@@ -222,6 +224,7 @@ class motion(Node, metaclass=dgpy_Module):
         self.detect_sub = self.create_subscription(DetectionArray, '/yolo/detections', self.detection_callback, 10)
         self.tracking_sub = self.create_subscription(DetectionArray, '/yolo/tracking', self.tracking_callback, 10)
         self.depth_sub = self.create_subscription(Image, depth_image_topic, self.depth_image_callback, 10)
+        self.camera_info_sub = self.create_subscription(CameraInfo, camera_info, self.camera_info_callback, 10)
         self.force_sub = self.create_subscription(WrenchStamped, '/msg_sync/force_msg', self.force_callback, 10)
         self.pos_sub = self.create_subscription(TransformStamped, '/msg_sync/position_msg', self.position_callback, 10)
         self.click_sub = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
@@ -230,6 +233,7 @@ class motion(Node, metaclass=dgpy_Module):
         self.gpio_sub
         self.detections = DetectionArray()
         self.tracked_detections = DetectionArray()
+        self.camera_info = CameraInfo()
         self.svd_msg = IOStates()
         self.force_msg = WrenchStamped()
         self.click_msg = PointStamped()
@@ -296,6 +300,10 @@ class motion(Node, metaclass=dgpy_Module):
             self.eoat_mesh = None
 
 
+        self._joint_move_client = ActionClient(self, JointMove, 'execute_joint_move')
+        self._raster_scan_client = ActionClient(self, RasterScan, 'execute_raster')
+        self._pipeline_move_client = ActionClient(self, PipelineMove, 'execute_pipeline_move')
+
         self._action_client = ActionClient(self, DgPython, 'dgpython')
         #self.broadcaster = self.create_publisher(Pose, "/dataguzzler_frame_publisher", 100)
 
@@ -317,6 +325,10 @@ class motion(Node, metaclass=dgpy_Module):
         self._spinner.start()
         self.RestartAcquisition()
         # self.tari_noether_client()
+
+    def camera_info_callback(self, msg):
+        self.camera_info = msg
+        return
 
     def gpio_callback(self, msg):
         self.svd_msg = msg
@@ -495,6 +507,85 @@ class motion(Node, metaclass=dgpy_Module):
         else:
             self.get_logger().info('Goal failed to cancel')
 
+    def CartesianMove(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
+
+        goal_msg = RasterScan.Goal()
+        
+        goal_msg.velocity = vel
+        goal_msg.acceleration = acc
+        goal_msg.ik_frame = ik_frame
+
+        if isinstance(msg, PoseArray):
+            print(f"PoseArray: {goal_msg}")
+            goal_msg.pose_array = msg
+        
+        elif isinstance(msg, list):
+            print(f"list: {goal_msg}")
+            goal_msg.pose_array.poses = msg
+            goal_msg.pose_array.header.frame_id = "world"
+
+        else:
+
+            self.get_logger().error(f'Wrong type: {msg.__class__}')
+            return False
+        
+        self._raster_scan_client.wait_for_server()
+        return self._raster_scan_client.send_goal(goal_msg)
+        
+    def FreeMove(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
+
+        goal_msg = PipelineMove.Goal()
+        
+        goal_msg.velocity = vel
+        goal_msg.acceleration = acc
+        goal_msg.ik_frame = ik_frame
+
+        if isinstance(msg, TransformStamped):
+
+            goal_msg.target_pose.pose.position.x = msg.transform.translation.x
+            goal_msg.target_pose.pose.position.y = msg.transform.translation.y
+            goal_msg.target_pose.pose.position.z = msg.transform.translation.z
+
+            goal_msg.target_pose.pose.orientation.x = msg.transform.rotation.x
+            goal_msg.target_pose.pose.orientation.y = msg.transform.rotation.y
+            goal_msg.target_pose.pose.orientation.z = msg.transform.rotation.z
+            goal_msg.target_pose.pose.orientation.w = msg.transform.rotation.w
+
+            self._pipeline_move_client.wait_for_server()
+            return self._pipeline_move_client.send_goal(goal_msg)
+        
+        elif isinstance(msg, Pose):
+
+            goal_msg.target_pose.header.stamp = rclpy.time.Time()
+            goal_msg.target_pose.header.frame_id = self.from_frame_rel
+            goal_msg.target_pose.pose = msg
+
+        else:
+
+            self.get_logger().error(f'Wrong type: {msg.__class__}')
+            return False
+
+        self._pipeline_move_client.wait_for_server()
+        return self._pipeline_move_client.send_goal(goal_msg)
+    
+    def JointMove(self, msg, vel=0.1, acc=0.1):
+         
+        if isinstance(msg, str):
+        
+            goal_msg = JointMove.Goal()
+
+            goal_msg.velocity = vel
+            goal_msg.acceleration = acc
+
+            goal_msg.target_state = msg
+            self._joint_move_client.wait_for_server()
+            return self._joint_move_client.send_goal(goal_msg)
+        
+        else:
+
+            self.get_logger().error(f'Wrong type: {msg.__class__}')
+            return False
+
 
     def Move(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
 
@@ -542,6 +633,64 @@ class motion(Node, metaclass=dgpy_Module):
 
         self._action_client.wait_for_server()
         return self._action_client.send_goal(goal_msg)
+
+#     def Move(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
+# 
+#         goal_msg = RasterScan.Goal()
+#         
+#         goal_msg.velocity = vel
+#         goal_msg.acceleration = acc
+#         goal_msg.ik_frame = ik_frame
+# 
+# 
+#         if isinstance(msg, Pose):
+#             print(f"Pose: {goal_msg}")
+#             goal_msg.pose_array.poses.append(msg)
+#         
+#         elif isinstance(msg, PoseArray):
+#             print(f"PoseArray: {goal_msg}")
+#             # goal_msg.waypoints = msg
+#             goal_msg.pose_array = msg
+# 
+#         elif isinstance(msg, TransformStamped):
+#             print(f"TransformStamped: {goal_msg}")
+#             t = Pose()
+#             p = Point()
+# 
+#             t.position.x = msg.transform.translation.x
+#             t.position.y = msg.transform.translation.y
+#             t.position.z = msg.transform.translation.z
+# 
+#             t.orientation.x = msg.transform.rotation.x
+#             t.orientation.y = msg.transform.rotation.y
+#             t.orientation.z = msg.transform.rotation.z
+#             t.orientation.w = msg.transform.rotation.w
+# 
+#             self.desired_t = t
+#             
+#             goal_msg.pose_array.poses.append(self.desired_t)
+#         elif isinstance(msg, list):
+#             print(f"list: {goal_msg}")
+#             goal_msg.pose_array.poses = msg
+#             goal_msg.pose_array.header.frame_id = "world"
+#             self.laser_scan_array_pub.publish(goal_msg.pose_array)
+# 
+#         elif isinstance(msg, str):
+# 
+#             goal_msg = JointMove.Goal()
+#         
+#             goal_msg.velocity = vel
+#             goal_msg.acceleration = acc
+# 
+#             goal_msg.target_state = msg
+#             self._joint_move_client.wait_for_server()
+#             return self._joint_move_client.send_goal(goal_msg)
+# 
+#         else:
+#             return 'Invalid variable type: ', msg.__class__
+# 
+#         self._raster_scan_client.wait_for_server()
+#         return self._raster_scan_client.send_goal(goal_msg)
     
 
 #    def pose_array_callback(self, msg):
