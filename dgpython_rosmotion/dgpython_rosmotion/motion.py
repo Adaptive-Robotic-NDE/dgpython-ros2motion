@@ -69,10 +69,16 @@ from threading import Thread
 import traceback
 from dataguzzler_python.dgpy import Module as dgpy_Module
 from dataguzzler_python.dgpy import InitCompatibleThread
+from dataguzzler_python.dgpy import threadsafe as dgpy_threadsafe
 import rclpy
 import rclpy.logging
 from rclpy.node import Node
+import threading
+import itertools
+from concurrent.futures import ThreadPoolExecutor
 from rclpy.action import ActionClient
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from dgpython_ros2_actioninterface.action import DgPython
 from tari_interfaces.action import RasterScan, JointMove, PipelineMove
 from tf2_ros import TransformException
@@ -83,7 +89,11 @@ from geometry_msgs.msg import TransformStamped, WrenchStamped
 from geometry_msgs.msg import PointStamped, PoseArray, Pose, Quaternion, TransformStamped, Point, PoseStamped
 from apriltag_msgs.msg import AprilTagDetectionArray
 from yolo_msgs.msg import DetectionArray
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, JointState
+from moveit_msgs.srv import GetPositionIK, GetStateValidity
+from moveit_msgs.msg import RobotState
+from control_msgs.action import FollowJointTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
 from ur_msgs.msg import IOStates
 from threading import RLock
 from typing import Any
@@ -94,7 +104,7 @@ from rclpy.task import Future
 # from industrial_reconstruction_msgs.msg import NormalFilterParams, RGBDImageParams, TSDFVolumeParams
 
 ur = pint.get_application_registry()
-orient_dtype = [('offset', '<f4', (4,)), ('quat', '<f4', (4,))]
+orient_dtype = [('quat', '<f4', (4,)), ('offset', '<f4', (4,))]
 
 
 class ParamAttribute(object):
@@ -147,6 +157,159 @@ class PatchRclpyIssue1123(ActionClient):
     def _get_result_async(self, *args: Any, **kwargs: Any) -> Future:
         with self._cpp_client_handle_lock:
             return super()._get_result_async(*args, **kwargs)
+
+    def send_goal_bounded(self, goal, goal_timeout=15.0, result_timeout=120.0, attempts=3, **kwargs):
+        """send_goal() that gives up instead of blocking forever.
+
+        rclpy's stock send_goal() waits on an event with no timeout. When the
+        client loses track of a goal response -- ros2/rclpy#1123, which the
+        locking above makes rarer but does not eliminate -- that event is never
+        set and the caller is wedged permanently. In a raster scan that means
+        the scan simply stops partway with no error, which is worse than
+        failing.
+
+        Position goals are idempotent: sending the same target twice moves there
+        once. So a dropped response is recoverable by resending.
+        """
+        last_error = None
+        for attempt in range(attempts):
+            event = threading.Event()
+
+            send_goal_future = self.send_goal_async(goal, **kwargs)
+            send_goal_future.add_done_callback(lambda future: event.set())
+
+            if not event.wait(goal_timeout):
+                last_error = "no goal response within %.1f s" % goal_timeout
+                self._node.get_logger().warning(
+                    "action %s: %s (attempt %d/%d), resending"
+                    % (self._action_name, last_error, attempt + 1, attempts))
+                continue
+
+            if send_goal_future.exception() is not None:
+                raise send_goal_future.exception()
+
+            goal_handle = send_goal_future.result()
+            if not goal_handle.accepted:
+                raise RuntimeError("action %s rejected the goal" % (self._action_name,))
+
+            result_future = goal_handle.get_result_async()
+            result_event = threading.Event()
+            result_future.add_done_callback(lambda future: result_event.set())
+
+            if not result_event.wait(result_timeout):
+                last_error = "no result within %.1f s" % result_timeout
+                self._node.get_logger().warning(
+                    "action %s: %s (attempt %d/%d), resending"
+                    % (self._action_name, last_error, attempt + 1, attempts))
+                continue
+
+            if result_future.exception() is not None:
+                raise result_future.exception()
+
+            return result_future.result()
+
+        raise TimeoutError("action %s: %s after %d attempts"
+                           % (self._action_name, last_error, attempts))
+
+class DgpyMultiThreadedExecutor(MultiThreadedExecutor):
+    """MultiThreadedExecutor whose worker threads can touch dgpy module state.
+
+    rclpy hands callbacks to a plain ThreadPoolExecutor. Those workers have no
+    dataguzzler-python thread context, so a node callback that touches module
+    attributes -- which most of the callbacks here do -- would not behave the
+    way it did when everything ran on the single spinner thread. Giving each
+    worker its own compatible context restores that.
+    """
+
+    def __init__(self, module, num_threads=4):
+        super().__init__(num_threads=num_threads)
+
+        counter = itertools.count()
+
+        def init_worker():
+            InitCompatibleThread(
+                module, "_executor%d" % (next(counter),),
+                no_thread_will_ever_wait_for_this_thread_while_holding_module_context=True)
+
+        # Replace the pool rclpy built with an equivalent one that initialises
+        # its workers. Done after super().__init__ so nothing has been submitted.
+        self._executor = ThreadPoolExecutor(num_threads, initializer=init_worker)
+
+
+class LivePose(object):
+    """The probe's live pose, readable while the motion module is busy moving.
+
+    `ros.t` is a module attribute, so reading it from another thread goes
+    through the dgpy module context lock -- and the thread that called
+    Move()/CartesianMove() holds that lock for the entire round trip. A
+    point-to-point move is ~0.5 s; one raster row is several seconds. Anything
+    that has to know where the probe is *while* it moves therefore gets one or
+    two readings for the whole sweep, and binds its data to the wrong place.
+
+    The TF thread pushes here instead. This is a plain object registered as
+    dgpy.threadsafe, so censoring passes the real object across the context
+    boundary rather than an OpaqueWrapper whose methods would take the module
+    lock all over again. Fetch it once outside a move:
+
+        pose = ros.live_pose        # cheap, needs the module context briefly
+        ...
+        pose.xy()                   # during a move: no module context at all
+
+    The TF thread owns update(); everything else only reads.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._xyz = None
+        self._quat = None
+        self._stamp = None
+        self.count = 0
+
+    def update(self, transform_stamped, when):
+        tr = transform_stamped.transform.translation
+        rot = transform_stamped.transform.rotation
+        # Copy the fields out rather than keeping the message: the TF thread
+        # reuses it, and a reader would otherwise see it change underneath.
+        with self._lock:
+            self._xyz = (tr.x, tr.y, tr.z)
+            self._quat = (rot.x, rot.y, rot.z, rot.w)
+            self._stamp = when
+            self.count += 1
+
+    def xyz(self):
+        """(x, y, z) in the world frame, or None before the first TF arrives."""
+        with self._lock:
+            return self._xyz
+
+    def xy(self):
+        """(x, y) in the world frame, or None before the first TF arrives."""
+        with self._lock:
+            if self._xyz is None:
+                return None
+            return (self._xyz[0], self._xyz[1])
+
+    def snapshot(self):
+        """((x,y,z), (qx,qy,qz,qw), monotonic time of the lookup), or None.
+
+        One consistent reading -- use this rather than calling xyz() and then
+        quat(), which can straddle an update.
+        """
+        with self._lock:
+            if self._xyz is None:
+                return None
+            return (self._xyz, self._quat, self._stamp)
+
+    def age(self):
+        """Seconds since the last TF update, or None. A large or growing value
+        means the TF thread is stuck, and any position read here is stale."""
+        with self._lock:
+            if self._stamp is None:
+                return None
+            return time.monotonic() - self._stamp
+
+
+dgpy_threadsafe.register(LivePose)
+
 
 class client(object):
     def __init__(self, client, serviceType, serverName):
@@ -251,6 +414,9 @@ class motion(Node, metaclass=dgpy_Module):
         self.from_frame_rel = from_frame_rel
         self.to_frame_rel = to_frame_rel
         self.t = TransformStamped()
+        # Same pose as self.t, but readable without the module context -- see
+        # LivePose. Created before the TF thread starts so it is never None.
+        self.live_pose = LivePose()
         self.desired_t = None
         self.specimen_pose_channel = '/specimen_pose'
         self.specimen_pose_channel_copy = '/specimen_pose_copy'
@@ -300,11 +466,60 @@ class motion(Node, metaclass=dgpy_Module):
             self.eoat_mesh = None
 
 
-        self._joint_move_client = ActionClient(self, JointMove, 'execute_joint_move')
-        self._raster_scan_client = ActionClient(self, RasterScan, 'execute_raster')
-        self._pipeline_move_client = ActionClient(self, PipelineMove, 'execute_pipeline_move')
+        # PatchRclpyIssue1123, not the stock ActionClient: rclpy's action client
+        # has no lock around the C++ client handle, so a goal sent while a
+        # previous response is still being dispatched can have its response
+        # matched to the wrong goal. It shows up as
+        #   "Ignoring unexpected goal response. There may be more than one
+        #    action server for the action 'dgpython'"
+        # and a send_goal() that never returns, which wedges a scan partway
+        # through. It needs repeated goals in quick succession to trigger, so a
+        # single move looks fine.
+        # A reentrant group, separate from the node default group the
+        # subscriptions use. Everything on a node shares one mutually exclusive
+        # callback group unless told otherwise, which means a goal response or a
+        # result response queues behind the TF, image and detection traffic this
+        # node also carries -- and TF alone runs at 200 Hz. That is what made a
+        # Move() round trip cost ~0.5 s against ~20 ms of actual motion.
+        self._action_callback_group = ReentrantCallbackGroup()
 
-        self._action_client = ActionClient(self, DgPython, 'dgpython')
+        self._joint_move_client = PatchRclpyIssue1123(self, JointMove, 'execute_joint_move', callback_group=self._action_callback_group)
+        self._raster_scan_client = PatchRclpyIssue1123(self, RasterScan, 'execute_raster', callback_group=self._action_callback_group)
+        self._pipeline_move_client = PatchRclpyIssue1123(self, PipelineMove, 'execute_pipeline_move', callback_group=self._action_callback_group)
+
+        self._action_client = PatchRclpyIssue1123(self, DgPython, 'dgpython', callback_group=self._action_callback_group)
+
+        # Inverse kinematics, and a way to command a joint configuration
+        # directly. Both exist for one reason: a Cartesian path is followed by
+        # solving IK at each step SEEDED from the previous one, so which arm
+        # configuration the path starts in decides whether it can be followed to
+        # the end. Every pose on a raster row can be individually reachable and
+        # the row still truncate two thirds of the way along, purely because the
+        # approach move left the arm in a configuration that runs out of joint
+        # travel. SolveIK() picks the configuration; MoveJoints() gets the arm
+        # into it. See ApproachInConfiguration().
+        self._compute_ik_client = self.create_client(
+            GetPositionIK, '/compute_ik', callback_group=self._action_callback_group)
+        # Used only by the fallback in MoveJoints(): when MoveIt cannot plan the
+        # joint move for us, this is what stands between an unchecked joint
+        # command and the fixturing.
+        self._state_validity_client = self.create_client(
+            GetStateValidity, '/check_state_validity',
+            callback_group=self._action_callback_group)
+        # Which trajectory controller is live differs between the simulated cell
+        # and the real robot: the UR driver runs scaled_joint_trajectory_controller
+        # (it honours the teach pendant speed slider), the Gazebo cell runs plain
+        # joint_trajectory_controller. Hardcoding either one silently does
+        # nothing on the other, so both are created and MoveJoints() picks
+        # whichever is actually being served, preferring the scaled one.
+        self._joint_traj_clients = [
+            (name, PatchRclpyIssue1123(
+                self, FollowJointTrajectory,
+                '/%s/follow_joint_trajectory' % name,
+                callback_group=self._action_callback_group))
+            for name in ("scaled_joint_trajectory_controller",
+                         "joint_trajectory_controller")]
+        self._joint_traj_client = None   # resolved on first use
         #self.broadcaster = self.create_publisher(Pose, "/dataguzzler_frame_publisher", 100)
 
 #        self.pose_array_subscriber = self.create_subscription(
@@ -507,20 +722,33 @@ class motion(Node, metaclass=dgpy_Module):
         else:
             self.get_logger().info('Goal failed to cancel')
 
-    def CartesianMove(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
+    def CartesianMove(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end", goal_timeout=15.0,
+                      result_timeout=300.0, min_fraction=1.0):
+        """One continuous Cartesian move through a list of poses.
 
+        min_fraction is the smallest acceptable fraction of the requested path.
+        The default 1.0 means the move fails outright rather than executing a
+        short one: for a rectangular raster row a short pass does not degrade the
+        c-scan, it fabricates the end of it, because every later trace is then at
+        the wrong grid index.
+
+        Lower it for a surface-following toolpath, where the segments are ragged
+        and demanding 100% of each one fails often. There a short pass costs only
+        coverage -- the traces carry their own poses, so nothing is misplaced.
+        The result carries `.result.fraction`, so the caller can report exactly
+        what it got either way.
+        """
         goal_msg = RasterScan.Goal()
-        
+
         goal_msg.velocity = vel
         goal_msg.acceleration = acc
         goal_msg.ik_frame = ik_frame
+        goal_msg.min_fraction = float(min_fraction)
 
         if isinstance(msg, PoseArray):
-            print(f"PoseArray: {goal_msg}")
             goal_msg.pose_array = msg
-        
+
         elif isinstance(msg, list):
-            print(f"list: {goal_msg}")
             goal_msg.pose_array.poses = msg
             goal_msg.pose_array.header.frame_id = "world"
 
@@ -528,19 +756,41 @@ class motion(Node, metaclass=dgpy_Module):
 
             self.get_logger().error(f'Wrong type: {msg.__class__}')
             return False
-        
+
+        self.get_logger().info(
+            f'execute_raster: {len(goal_msg.pose_array.poses)} poses, vel={vel}, acc={acc}, '
+            f'min_fraction={min_fraction}')
+
+        # send_goal_bounded, not send_goal -- see the note above JointMove().
+        # result_timeout is the long one here: mtc_hub_node accepts immediately
+        # and then plans and sweeps the whole row inside the execute callback.
         self._raster_scan_client.wait_for_server()
-        return self._raster_scan_client.send_goal(goal_msg)
-        
-    def FreeMove(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
+        return self._raster_scan_client.send_goal_bounded(
+            goal_msg, goal_timeout=goal_timeout, result_timeout=result_timeout)
+
+    def FreeMove(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end", goal_timeout=15.0, result_timeout=120.0):
 
         goal_msg = PipelineMove.Goal()
-        
+
         goal_msg.velocity = vel
         goal_msg.acceleration = acc
         goal_msg.ik_frame = ik_frame
 
         if isinstance(msg, TransformStamped):
+
+            # The frame matters, and leaving it empty is not harmless. Without it
+            # the goal carries a PoseStamped whose header.frame_id is "", MoveIt
+            # cannot resolve what the pose is relative to, and PipelineHandler
+            # hangs inside planning instead of failing -- mtc_hub_node logs
+            # "Pose frame = ''" and never logs anything again. Because that
+            # handler runs on a detached thread while the node is spun by a
+            # single-threaded executor, the hang takes the WHOLE node down: it
+            # stops answering execute_raster and execute_joint_move too, and the
+            # only recovery is restarting mtc_node. The Pose branch below always
+            # set the frame; this one never did.
+            goal_msg.target_pose.header.stamp = rclpy.time.Time().to_msg()
+            goal_msg.target_pose.header.frame_id = (msg.header.frame_id
+                                                    or self.from_frame_rel)
 
             goal_msg.target_pose.pose.position.x = msg.transform.translation.x
             goal_msg.target_pose.pose.position.y = msg.transform.translation.y
@@ -551,13 +801,33 @@ class motion(Node, metaclass=dgpy_Module):
             goal_msg.target_pose.pose.orientation.z = msg.transform.rotation.z
             goal_msg.target_pose.pose.orientation.w = msg.transform.rotation.w
 
-            self._pipeline_move_client.wait_for_server()
-            return self._pipeline_move_client.send_goal(goal_msg)
-        
         elif isinstance(msg, Pose):
 
-            goal_msg.target_pose.header.stamp = rclpy.time.Time()
-            goal_msg.target_pose.header.frame_id = self.from_frame_rel
+            # .to_msg(), like the branch above. rclpy.time.Time() is an rclpy
+            # object, not a builtin_interfaces.msg.Time; rosidl's Python setter
+            # does not type-check it, so the wrong type is stored happily and the
+            # C converter ABORTS THE WHOLE PROCESS when the goal is serialised:
+            #   builtin_interfaces__msg__time__convert_from_py: Assertion
+            #   `strncmp("builtin_interfaces.msg._time.Time", ...) == 0' failed
+            # No traceback, no exception -- SIGABRT. Nothing in this tree passed
+            # a bare Pose to FreeMove until the reconstruction sweep did, which
+            # is why it survived; the TransformStamped branch was written
+            # correctly when the frame_id fix went in and this one was missed.
+            # to_frame_rel, NOT from_frame_rel, and this is the same fault
+            # SolveIK() has a paragraph about: an unstamped Pose is in the
+            # PLANNING frame, not the tool's own. For motion('ros', recdb,
+            # 'probe_end', 'world') from_frame_rel is 'probe_end', so a bare
+            # Pose in world coordinates was handed to MoveIt as a pose relative
+            # to the very link being moved. mtc_hub_node logs it plainly --
+            #   Creating Pipeline Task -> Goal frame: 'probe_end' ...
+            #   [ompl] Unable to sample any valid states for goal tree
+            # -- and the goal is simply ABORTED, with a target that is
+            # individually IK-solvable and collision-free when asked about
+            # properly. The TransformStamped branch above never had this because
+            # ros.t carries frame_id='world'; only callers passing a bare Pose
+            # were affected, which until the reconstruction sweep was nobody.
+            goal_msg.target_pose.header.stamp = rclpy.time.Time().to_msg()
+            goal_msg.target_pose.header.frame_id = self.to_frame_rel
             goal_msg.target_pose.pose = msg
 
         else:
@@ -565,27 +835,373 @@ class motion(Node, metaclass=dgpy_Module):
             self.get_logger().error(f'Wrong type: {msg.__class__}')
             return False
 
+        # send_goal_bounded, not send_goal -- see the note above JointMove().
         self._pipeline_move_client.wait_for_server()
-        return self._pipeline_move_client.send_goal(goal_msg)
-    
-    def JointMove(self, msg, vel=0.1, acc=0.1):
-         
+        return self._pipeline_move_client.send_goal_bounded(
+            goal_msg, goal_timeout=goal_timeout, result_timeout=result_timeout)
+
+    # Every action call in this module goes through send_goal_bounded rather
+    # than rclpy's send_goal. The stock one waits on an event with no timeout,
+    # so a goal response lost to ros2/rclpy#1123 wedges the caller permanently
+    # -- a scan that stops partway with no error is worse than one that fails.
+    #
+    # Splitting the two timeouts matters because mtc_hub_node's handlers all
+    # return ACCEPT_AND_EXECUTE straight away and do the planning inside the
+    # execute callback. So goal_timeout only has to cover the accept round trip
+    # (15 s is generous), while result_timeout has to cover planning -- which
+    # retries, up to Planning Attempts x Planning Time -- plus the motion.
+    #
+    # Note the retry resends rather than waits: the server accepted and started
+    # the first goal, so a resend overlaps it instead of following it. That is
+    # still the right trade for a lost response, which is rare, and the arm ends
+    # at the commanded target either way -- but it is why the timeouts want to
+    # be comfortably longer than the real worst case, not tight.
+    def JointMove(self, msg, vel=0.1, acc=0.1, goal_timeout=15.0, result_timeout=120.0,
+                  joint_names=None, allow_contact_links=None, allow_contact_objects=None):
+        """Joint-space move through MoveIt: a named SRDF state, or joint values.
+
+        `msg` is either a string naming an SRDF group state ("over_table") or a
+        sequence of joint values. Both go to the same action, which plans with
+        MoveIt's joint interpolation planner -- so the arm ends in exactly the
+        configuration asked for, and every interpolated step on the way there is
+        checked against the planning scene.
+
+        allow_contact_links / allow_contact_objects excuse expected contact; see
+        MoveJoints() and JointMove.action. Leave them alone for standoff work.
+        """
+        goal_msg = JointMove.Goal()
+        goal_msg.velocity = vel
+        goal_msg.acceleration = acc
+        goal_msg.allow_contact_links = list(allow_contact_links or [])
+        goal_msg.allow_contact_objects = list(allow_contact_objects or [])
+
         if isinstance(msg, str):
-        
-            goal_msg = JointMove.Goal()
-
-            goal_msg.velocity = vel
-            goal_msg.acceleration = acc
-
             goal_msg.target_state = msg
-            self._joint_move_client.wait_for_server()
-            return self._joint_move_client.send_goal(goal_msg)
-        
+        elif msg is not None and not isinstance(msg, (bytes, dict)):
+            try:
+                positions = [float(v) for v in msg]
+            except TypeError:
+                self.get_logger().error(f'Wrong type: {msg.__class__}')
+                return False
+            goal_msg.target_joints = positions
+            goal_msg.target_joint_names = list(joint_names or self.UR_JOINTS)
         else:
-
             self.get_logger().error(f'Wrong type: {msg.__class__}')
             return False
 
+        self._joint_move_client.wait_for_server()
+        return self._joint_move_client.send_goal_bounded(
+            goal_msg, goal_timeout=goal_timeout, result_timeout=result_timeout)
+
+
+    UR_JOINTS = ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+                 "wrist_1_joint", "wrist_2_joint", "wrist_3_joint")
+
+    def SolveIK(self, msg, seed=None, group="ur_manipulator", ik_frame="probe_end",
+                avoid_collisions=True, timeout=2.0):
+        """Joint values for a pose, optionally in the same branch as `seed`.
+
+        Returns a list in UR_JOINTS order, or None if there is no solution.
+
+        `seed` is what makes this useful. An arm has several configurations that
+        put the tool at the same pose, and they are not interchangeable: one can
+        continue along a path and another runs out of joint travel partway. Pass
+        the joint values of a configuration you want to stay near and the solver
+        returns the solution in that branch.
+        """
+        # An unstamped pose is in the PLANNING frame, not the tool's own. This
+        # used to fall back to from_frame_rel, which for motion('ros', recdb,
+        # 'probe_end', 'world') is 'probe_end' -- so /compute_ik was asked for a
+        # pose relative to the very link it was solving for, and returned no
+        # solution for every target. It reads as an unreachable workspace: a
+        # toolpath over ground the raster scan covers daily came back 0 of 10
+        # solvable. to_frame_rel is the world frame this module was constructed
+        # with, which is what a caller handing over a bare Pose means.
+        if isinstance(msg, TransformStamped):
+            pose = Pose()
+            pose.position.x = msg.transform.translation.x
+            pose.position.y = msg.transform.translation.y
+            pose.position.z = msg.transform.translation.z
+            pose.orientation = msg.transform.rotation
+            frame = msg.header.frame_id or self.to_frame_rel
+        elif isinstance(msg, PoseStamped):
+            pose = msg.pose
+            frame = msg.header.frame_id or self.to_frame_rel
+        elif isinstance(msg, Pose):
+            pose = msg
+            frame = self.to_frame_rel
+        else:
+            raise TypeError("SolveIK needs a Pose/PoseStamped/TransformStamped, not %r"
+                            % (msg.__class__,))
+
+        req = GetPositionIK.Request()
+        req.ik_request.group_name = group
+        req.ik_request.ik_link_name = ik_frame
+        req.ik_request.avoid_collisions = avoid_collisions
+        req.ik_request.timeout.sec = int(timeout)
+        req.ik_request.timeout.nanosec = int((timeout - int(timeout))*1e9)
+        ps = PoseStamped()
+        ps.header.frame_id = frame
+        ps.pose = pose
+        req.ik_request.pose_stamped = ps
+        if seed is not None:
+            rs = RobotState()
+            js = JointState()
+            js.name = list(self.UR_JOINTS)
+            js.position = [float(v) for v in seed]
+            rs.joint_state = js
+            req.ik_request.robot_state = rs
+
+        if not self._compute_ik_client.wait_for_service(timeout_sec=5.0):
+            return None
+        future = self._compute_ik_client.call_async(req)
+        event = threading.Event()
+        future.add_done_callback(lambda f: event.set())
+        if not event.wait(max(timeout*4, 10.0)):
+            return None
+        res = future.result()
+        if res is None or res.error_code.val != 1:
+            return None
+        found = dict(zip(res.solution.joint_state.name,
+                         res.solution.joint_state.position))
+        try:
+            return [found[j] for j in self.UR_JOINTS]
+        except KeyError:
+            return None
+
+    def CheckStateValidity(self, positions, joint_names=None, group="ur_manipulator",
+                           allow_contact_links=None, allow_contact_objects=None,
+                           timeout=5.0):
+        """Is this joint configuration collision-free? (None = could not tell.)
+
+        Returns True, False, or None -- and the three are genuinely different.
+        None means the service did not answer, which is NOT permission to move:
+        the caller has to decide whether an unverifiable target is acceptable,
+        and the answer next to real fixturing is no.
+
+        allow_contact_links / allow_contact_objects express "contact is expected
+        here". The service reports the colliding pairs, so rather than turning
+        collision checking off, this looks at what is actually touching and
+        excuses only the contacts the caller declared. With objects named, only
+        those pairs pass; with links alone, any contact involving one of those
+        links passes -- which is blunt, and is what remains available while the
+        specimen is not modelled and so has no name to pair against.
+        """
+        allow_links = set(allow_contact_links or [])
+        allow_objects = set(allow_contact_objects or [])
+
+        req = GetStateValidity.Request()
+        req.group_name = group
+        rs = RobotState()
+        js = JointState()
+        js.name = list(joint_names or self.UR_JOINTS)
+        js.position = [float(v) for v in positions]
+        rs.joint_state = js
+        # The service checks the state as given against the CURRENT scene, and a
+        # partial joint state is completed from the monitored state -- so naming
+        # only the arm joints is correct and does not silently zero the rest.
+        rs.is_diff = True
+        req.robot_state = rs
+
+        if not self._state_validity_client.wait_for_service(timeout_sec=timeout):
+            self.get_logger().warning(
+                "/check_state_validity did not appear within %.1f s; "
+                "cannot verify the joint target" % timeout)
+            return None
+        future = self._state_validity_client.call_async(req)
+        event = threading.Event()
+        future.add_done_callback(lambda f: event.set())
+        if not event.wait(max(timeout*2, 10.0)):
+            self.get_logger().warning("/check_state_validity did not answer")
+            return None
+        res = future.result()
+        if res is None:
+            return None
+        if res.valid:
+            return True
+
+        if not allow_links and not allow_objects:
+            for c in res.contacts:
+                self.get_logger().error(
+                    "joint target in collision: %s <-> %s" % (c.contact_body_1, c.contact_body_2))
+            return False
+
+        # Contact was declared expected. Check that every reported contact is one
+        # of the declared ones -- an undeclared contact elsewhere on the arm is
+        # still a fault, and this is the difference between "the probe is allowed
+        # to touch the part" and "collision checking is off".
+        if not res.contacts:
+            # Invalid with no contacts reported means something other than
+            # collision (joint limits, a path constraint). Not ours to excuse.
+            self.get_logger().error(
+                "joint target reported invalid with no contacts -- joint limits "
+                "or a constraint, not something allow_contact can excuse")
+            return False
+
+        unexpected = []
+        for c in res.contacts:
+            bodies = (c.contact_body_1, c.contact_body_2)
+            if allow_objects:
+                ok = ((bodies[0] in allow_links and bodies[1] in allow_objects) or
+                      (bodies[1] in allow_links and bodies[0] in allow_objects))
+            else:
+                ok = bodies[0] in allow_links or bodies[1] in allow_links
+            if ok:
+                self.get_logger().warning(
+                    "expected contact: %s <-> %s" % bodies)
+            else:
+                unexpected.append(bodies)
+        for bodies in unexpected:
+            self.get_logger().error("unexpected contact: %s <-> %s" % bodies)
+        return not unexpected
+
+    def MoveJoints(self, positions, secs=5.0, joint_names=None,
+                   goal_timeout=15.0, result_timeout=120.0,
+                   plan=True, validate=True,
+                   allow_contact_links=None, allow_contact_objects=None):
+        """Drive the arm to an explicit joint configuration.
+
+        The configuration is the point. A pose goal lets the planner pick
+        whichever branch it likes, and the ones it picks routinely cannot follow
+        a raster row to its far end -- which is the failure this exists to solve.
+        So the target is always the exact configuration asked for; the only
+        question is what checks it on the way.
+
+        `plan=True` (default) sends it through MoveIt's execute_joint_move, which
+        interpolates in joint space and checks every step against the planning
+        scene. Same motion, checked. That is what makes this usable next to real
+        fixturing rather than only against Gazebo.
+
+        If no such server is answering -- an older mtc_node, or a cell running
+        without it -- this falls back to /check_state_validity on the target plus
+        a direct trajectory-controller command. That is weaker: it checks the
+        endpoint, not the path. It says so in the log when it does it.
+
+        A PLANNING FAILURE IS NOT A REASON TO FALL BACK, and does not. MoveIt
+        refusing the move means something is in the way; commanding it anyway
+        would make the check decorative. Pass plan=False if you have decided to
+        move regardless, which still validates the endpoint unless you also pass
+        validate=False.
+
+        allow_contact_links / allow_contact_objects declare expected contact --
+        contact scanning demands contact, so the probe touching the specimen
+        cannot be an error. They are honoured by both paths.
+        """
+        names = list(joint_names or self.UR_JOINTS)
+        positions = [float(v) for v in positions]
+
+        if plan:
+            if self._joint_move_client.wait_for_server(timeout_sec=5.0):
+                result = self.JointMove(positions, joint_names=names,
+                                        goal_timeout=goal_timeout,
+                                        result_timeout=result_timeout,
+                                        allow_contact_links=allow_contact_links,
+                                        allow_contact_objects=allow_contact_objects)
+                if getattr(getattr(result, "result", None), "success", False):
+                    return result
+                self.get_logger().error(
+                    "MoveIt refused the joint move. NOT falling back to a direct "
+                    "command -- something is in the way, or the target is out of "
+                    "limits. Pass plan=False to override deliberately.")
+                return result
+            self.get_logger().warning(
+                "no execute_joint_move server; falling back to a direct trajectory "
+                "command with an endpoint-only validity check. The PATH is not "
+                "checked on this route.")
+
+        if validate:
+            valid = self.CheckStateValidity(
+                positions, joint_names=names,
+                allow_contact_links=allow_contact_links,
+                allow_contact_objects=allow_contact_objects)
+            if valid is not True:
+                self.get_logger().error(
+                    "refusing to command joint target: validity is %s"
+                    % ("unknown" if valid is None else "invalid",))
+                return None
+
+        return self._command_joints(positions, secs=secs, joint_names=names,
+                                    goal_timeout=goal_timeout,
+                                    result_timeout=result_timeout)
+
+    def _command_joints(self, positions, secs=5.0, joint_names=None,
+                        goal_timeout=15.0, result_timeout=120.0):
+        """Straight to the trajectory controller. No planner, no checks.
+
+        Separated out so that "command the arm" and "decide whether commanding
+        the arm is safe" are not the same function. Use MoveJoints().
+        """
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = list(joint_names or self.UR_JOINTS)
+        point = JointTrajectoryPoint()
+        point.positions = [float(v) for v in positions]
+        point.time_from_start.sec = int(secs)
+        point.time_from_start.nanosec = int((secs - int(secs))*1e9)
+        goal.trajectory.points.append(point)
+
+        client = self._resolve_joint_traj_client()
+        return client.send_goal_bounded(
+            goal, goal_timeout=goal_timeout, result_timeout=result_timeout)
+
+    def _resolve_joint_traj_client(self, timeout=5.0):
+        """Whichever trajectory controller is actually running here."""
+        if self._joint_traj_client is not None:
+            return self._joint_traj_client
+        for name, client in self._joint_traj_clients:
+            if client.wait_for_server(timeout_sec=timeout):
+                self.get_logger().info("MoveJoints using %s" % name)
+                self._joint_traj_client = client
+                return client
+        raise RuntimeError(
+            "no trajectory controller found -- tried %s"
+            % ", ".join(n for n, _ in self._joint_traj_clients))
+
+    def ApproachInConfiguration(self, start, end, secs=6.0,
+                                plan=True, allow_contact_links=None,
+                                allow_contact_objects=None, **kwargs):
+        """Put the arm at `start` in a configuration that can also reach `end`.
+
+        This is the fix for silently truncated raster rows. Moving to the start
+        pose the ordinary way lets the planner choose any configuration that
+        reaches it, and the ones it picks routinely cannot follow the row to the
+        far end -- computeCartesianPath then truncates partway and, before it was
+        made to fail, executed the short path as if nothing had happened. Every
+        pose on the row is individually reachable; it is the configuration the
+        row is entered in that decides how far it gets.
+
+        Solving the END first and seeding the START from it picks a configuration
+        that demonstrably reaches both, so the straight line between them stays
+        in one branch. Measured on a 60 waypoint, 0.30 m row that had been
+        completing 65-88%: 100.0%.
+
+        The move itself goes through MoveIt by default (see MoveJoints), so the
+        chosen configuration is reached exactly and the path to it is collision
+        checked. Choosing the configuration and checking the way to it are
+        separate concerns, and only the first one needs the planner kept out of
+        it.
+
+        Returns the joint configuration used, or None if IK failed or the move
+        was refused -- in which case the caller should fall back to an ordinary
+        Move and will probably get a short row, or stop.
+        """
+        q_end = self.SolveIK(end, **kwargs)
+        if q_end is None:
+            return None
+        q_start = self.SolveIK(start, seed=q_end, **kwargs)
+        if q_start is None:
+            return None
+        result = self.MoveJoints(q_start, secs=secs, plan=plan,
+                                 allow_contact_links=allow_contact_links,
+                                 allow_contact_objects=allow_contact_objects)
+        if result is None:
+            return None
+        # The planned path reports whether it executed. The direct fallback
+        # returns the controller's own result, which has no .result.success --
+        # treat anything that came back at all as commanded, as before.
+        inner = getattr(result, "result", None)
+        if inner is not None and hasattr(inner, "success") and not inner.success:
+            return None
+        return q_start
 
     def Move(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
 
@@ -632,7 +1248,7 @@ class motion(Node, metaclass=dgpy_Module):
             return 'Invalid variable type: ', msg.__class__
 
         self._action_client.wait_for_server()
-        return self._action_client.send_goal(goal_msg)
+        return self._action_client.send_goal_bounded(goal_msg)
 
 #     def Move(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
 # 
@@ -793,9 +1409,14 @@ class motion(Node, metaclass=dgpy_Module):
                         self.to_frame_rel,
                         self.from_frame_rel,
                         rclpy.time.Time())
-                
+
+                # Publish to the context-free holder first: this thread keeps
+                # running while a move holds the module context, and the holder
+                # is the only way anything outside can see the pose meanwhile.
+                self.live_pose.update(self.t, time.monotonic())
+
                 self.probe_end_pub.publish(self.t)
-                
+
                 self.azure_t = self._tf_buffer.lookup_transform(
                         self.to_frame_rel,
                         'azure_rgb',
@@ -1012,11 +1633,17 @@ class motion(Node, metaclass=dgpy_Module):
 
     def SpinnerThread(self):
         InitCompatibleThread(self, "_spinner")
-    
-        r = self.create_rate(30)
 
-        while not self._quit:
-            rclpy.spin(self)
-            r.sleep()
-            #time.sleep(0.5)
+        # rclpy.spin() is single threaded: one callback at a time for the whole
+        # node. spin_once() on a multi threaded executor dispatches to the pool
+        # and returns, so TF, images and action responses proceed in parallel
+        # instead of taking turns.
+        executor = DgpyMultiThreadedExecutor(self, num_threads=4)
+        executor.add_node(self)
+        try:
+            while not self._quit:
+                executor.spin_once(timeout_sec=0.1)
+        finally:
+            executor.remove_node(self)
+            executor.shutdown()
 

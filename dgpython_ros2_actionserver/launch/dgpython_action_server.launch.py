@@ -257,10 +257,19 @@ def generate_launch_description():
             robot_description_kinematics,
             octomap_config,
             octomap_updater_config,
+            {"use_sim_time": LaunchConfiguration("use_sim_time")},
         ],
         #prefix=['xterm -e gdb -ex run --args']
     )
     declared_arguments = []
+    
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "use_sim_time",
+            default_value="false",
+            description="Use simulation (Gazebo) clock if true",
+        )
+    )
 
     declared_arguments.append(
         DeclareLaunchArgument(
