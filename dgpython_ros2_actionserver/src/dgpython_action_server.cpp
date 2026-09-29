@@ -1,13 +1,13 @@
 /*#######################################################################
 # AdaptiveNDE Project                                                   #
-# AFRL-ROS Package                                                      # 
+# dgpython_ros2_actionserver Package                                    #
 #########################################################################
 # Copyright 2023-2024 University of Dayton                              #
 #                                                                       #
-# Redistribution and use in source and binary forms, with or without    # 
+# Redistribution and use in source and binary forms, with or without    #
 # modification, are permitted provided that the following conditions    #
 # are met:                                                              #
-#                                                                       # 
+#                                                                       #
 # 1. Redistributions of source code must retain the above copyright     #
 #    notice, this list of conditions and the following disclaimer.      #
 # 2. Redistributions in binary form must reproduce the above copyright  #
@@ -35,21 +35,21 @@
 #                                                                       #
 # DISTRIBUTION A. Approved for public release: distribution unlimited.  #
 #########################################################################
-# File:  dgpython_action_server.cpp                                                     
+# File:  dgpython_action_server.cpp
 # Authors: Tyler Lesthaeghe
-# Created: 2023-06-22                                                  
+# Created: 2023-06-22
 # Description:
 #   Dataguzzler/MoveIt Bridge Implementation
-# Derived From:                                                         
-#   https://moveit.picknik.ai/main/index.html    
+# Derived From:
+#   https://moveit.picknik.ai/main/index.html
 #     under BSD 3-Clause License
 #########################################################################
-# Revision Log                                                          
-# 
+# Revision Log
+#
 # 2023-06-22:  Initial Commit
 # 2023-11-06:  Added Stop on Failure
 # 2023-11-14:  Debugging Statements
-# 
+#
 #########################################################################
 # Development Notes
 #

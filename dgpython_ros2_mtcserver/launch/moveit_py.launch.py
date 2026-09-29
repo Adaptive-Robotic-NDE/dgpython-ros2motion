@@ -1,13 +1,13 @@
 #########################################################################
 # AdaptiveNDE Project                                                   #
-# AFRL-ROS Package                                                      # 
+# dgpython_ros2_mtcserver Package                                       #
 #########################################################################
 # Copyright 2023-2024 University of Dayton                              #
 #                                                                       #
-# Redistribution and use in source and binary forms, with or without    # 
+# Redistribution and use in source and binary forms, with or without    #
 # modification, are permitted provided that the following conditions    #
 # are met:                                                              #
-#                                                                       # 
+#                                                                       #
 # 1. Redistributions of source code must retain the above copyright     #
 #    notice, this list of conditions and the following disclaimer.      #
 # 2. Redistributions in binary form must reproduce the above copyright  #
@@ -35,25 +35,26 @@
 #                                                                       #
 # DISTRIBUTION A. Approved for public release: distribution unlimited.  #
 #########################################################################
-# File:  ur_moveit.launch.py                                                     
+# File:  ur_moveit.launch.py
 # Authors: Denis Stogl (PickNik), Tyler Lesthaeghe, Liam Murray
 # Created: 2023-04-21
 # Description:
 #   Launch File for MoveIt with UR Robot
-# Derived From:                                                         
+# Derived From:
 #   https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver
 #       Adapted from ur_moveit.launch.py
-#       under BSD-3-Clause                              
+#       under BSD-3-Clause
 #########################################################################
-# Revision Log                                                          
-# 
+# Revision Log
+#
 # 2023-04-21:  Initial Commit
 # 2023-11-14:  Modifications for UR Driver Changes
-# 
+# 2026-09-29:  Hardening Complete Automated Pipeline
+#
 #########################################################################
 # Development Notes
-#   
-# 
+#
+#
 #########################################################################
 
 
@@ -100,8 +101,58 @@ from launch.actions import OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution, TextSubstitution, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from ur_moveit_config.launch_common import load_yaml
+
+# WHICH CELL'S ROOM THIS PLANS AGAINST.
+#
+# ur_cell.urdf.xacro takes the environment as a file path and defaults to the
+# BARE one: an arm bolted to `world`, no bench. Right for a description with no
+# cell, wrong for a planner -- MoveIt would plan against a scene with no bench
+# while Gazebo has one, and the arm would plan straight through it.
+#
+# Resolved at import from TARI_CELL_PACKAGE so it needs no launch argument
+# threaded through three repositories. Set it to "" for the bare environment.
+#
+# The description itself must reach the node as ParameterValue(..., str): a
+# Command() substitution handed straight to a Node parameter is auto-typed by
+# launch, which parses it as YAML. A 31 kB URDF is not YAML, so it fails with
+# "Unable to parse the value of parameter robot_description as yaml" at LAUNCH
+# time, long after the xacro itself succeeded -- which points at the description
+# rather than at the plumbing.
+
+def _cell_env(cell_package):
+    import os
+    from ament_index_python.packages import (PackageNotFoundError,
+                                             get_package_share_directory)
+    shared = get_package_share_directory("tari_ur_description")
+    urdf = os.path.join(shared, "urdf", "environments", "bare", "environment.urdf.xacro")
+    srdf = os.path.join(shared, "srdf", "environments", "bare", "environment.srdf.xacro")
+    # The arm's own measured geometry. None means the cell does not ship one
+    # and the caller should fall back to UR nominal values.
+    calib = None
+    cell = (cell_package or "").strip()
+    if cell:
+        try:
+            share = get_package_share_directory(cell)
+        except PackageNotFoundError:
+            return urdf, srdf, calib
+        cu = os.path.join(share, "urdf", "environment.urdf.xacro")
+        cs = os.path.join(share, "srdf", "environment.srdf.xacro")
+        ck = os.path.join(share, "etc", "calibration.yaml")
+        if os.path.exists(cu):
+            urdf = cu
+        if os.path.exists(cs):
+            srdf = cs
+        if os.path.exists(ck):
+            calib = ck
+    return urdf, srdf, calib
+
+
+_ENV_URDF, _ENV_SRDF, _CELL_CALIBRATION = _cell_env(
+    os.environ.get("TARI_CELL_PACKAGE", "tari_cell_ex_ur10e_1"))
+
 
 def launch_setup(context, *args, **kwargs):
 
@@ -128,6 +179,7 @@ def launch_setup(context, *args, **kwargs):
     safety_k_position = LaunchConfiguration("safety_k_position")
     launch_d415 = LaunchConfiguration("launch_d415")
     launch_azure = LaunchConfiguration("launch_azure")
+    azure_bracket = LaunchConfiguration("azure_bracket")
     launch_keyence = LaunchConfiguration("launch_keyence")
     launch_ut = LaunchConfiguration("launch_ut")
     launch_zed = LaunchConfiguration("launch_zed")
@@ -153,8 +205,18 @@ def launch_setup(context, *args, **kwargs):
     joint_limit_params = PathJoinSubstitution(
         [FindPackageShare(description_package), "config", ur_type, "joint_limits.yaml"]
     )
-    kinematics_params = PathJoinSubstitution(
-        [FindPackageShare(tari_package), "etc", "", "ex-ur10e-1_calibration.yaml"]
+    # THE CELL'S MEASURED CALIBRATION, and every node in the cell has to render
+    # with the same one. Hardcoding UR nominal values here while
+    # ur_moveit.launch.py picks the cell's etc/calibration.yaml makes move_group
+    # and this node describe two different arms: move_group's FK of the current
+    # joint values and the TF tree then disagree by about 1 mm at probe_end, and
+    # that is exactly the error ros.Move() accumulates per call -- it commands a
+    # TF-reported pose that move_group's model cannot reach, lands a millimetre
+    # away, and the next command is taken from there.
+    #
+    # Falls back to UR nominal only when the cell ships no calibration.
+    kinematics_params = _CELL_CALIBRATION or PathJoinSubstitution(
+        [FindPackageShare("ur_description"), "config", ur_type, "default_kinematics.yaml"]
     )
     physical_params = PathJoinSubstitution(
         [FindPackageShare(description_package), "config", ur_type, "physical_parameters.yaml"]
@@ -262,6 +324,9 @@ def launch_setup(context, *args, **kwargs):
             "script_command_port:=",
             script_command_port,
             " ",
+            "environment_file:=",
+            _ENV_URDF,
+            " ",
             "tooling:=",
             tooling,
             " ",
@@ -270,6 +335,9 @@ def launch_setup(context, *args, **kwargs):
             " ",
             "launch_azure:=",
             launch_azure,
+            " ",
+            "azure_bracket:=",
+            azure_bracket,
             " ",
             "launch_keyence:=",
             launch_keyence,
@@ -288,7 +356,7 @@ def launch_setup(context, *args, **kwargs):
 
         ]
     )
-    robot_description = {"robot_description": robot_description_content}
+    robot_description = {"robot_description": ParameterValue(robot_description_content, value_type=str)}
 
     # MoveIt Configuration
     robot_description_semantic_content = Command(
@@ -307,6 +375,9 @@ def launch_setup(context, *args, **kwargs):
             "prefix:=",
             prefix,
             " ",
+            "environment_srdf:=",
+            _ENV_SRDF,
+            " ",
             "tooling:=",
             tooling,
             " ",
@@ -316,8 +387,11 @@ def launch_setup(context, *args, **kwargs):
             "launch_azure:=",
             launch_azure,
             " ",
+            "azure_bracket:=",
+            azure_bracket,
+            " ",
             "launch_keyence:=",
-            launch_ut,
+            launch_keyence,
             " ",
             "launch_ut:=",
             launch_ut,
@@ -332,7 +406,7 @@ def launch_setup(context, *args, **kwargs):
             sim_ignition,
         ]
     )
-    robot_description_semantic = {"robot_description_semantic": robot_description_semantic_content}
+    robot_description_semantic = {"robot_description_semantic": ParameterValue(robot_description_semantic_content, value_type=str)}
 
     robot_description_kinematics = PathJoinSubstitution(
         [FindPackageShare(moveit_config_package), "config", "kinematics.yaml"]
@@ -351,14 +425,9 @@ def launch_setup(context, *args, **kwargs):
         )
     }
 
-    # Octomap Configuration
-    # octomap_config = {"sensors_3d": load_yaml("tari_ur_launch", 'config/sensor_3d.yaml')}
-    octomap_config = {'octomap_frame': 'azure_rgb', 
-                      'octomap_resolution': 0.01,
-                      'max_range': 5.0}
-
-    octomap_updater_config = load_yaml('tari_ur_launch', 'config/sensor_3d.yaml')
-    octomap_config.update(octomap_updater_config)
+    # No octomap here: this node is not the occupancy map monitor and never
+    # passed the config to anything. See ur_moveit.launch.py for why these
+    # cells run without one at all.
     # Planning Configuration
     ompl_planning_pipeline_config = {
         "move_group": {
@@ -367,7 +436,7 @@ def launch_setup(context, *args, **kwargs):
             "start_state_max_bounds_error": 0.1,
         }
     }
-    ompl_planning_yaml = load_yaml("tari_ur_launch", "config/ompl_planning.yaml")
+    ompl_planning_yaml = load_yaml("tari_ur_description", "config/ompl_planning.yaml")
     ompl_planning_pipeline_config["move_group"].update(ompl_planning_yaml)
 
     # Trajectory Execution Configuration
@@ -386,7 +455,17 @@ def launch_setup(context, *args, **kwargs):
     trajectory_execution = {
         "moveit_manage_controllers": False,
         "trajectory_execution.allowed_execution_duration_scaling": 1.2,
-        "trajectory_execution.allowed_goal_duration_margin": 0.5,
+        # The bound MoveIt puts on getting the controller's RESULT back is
+        # scaling*duration + margin, so on a near-zero-length move the scaling
+        # term vanishes and the constant is the whole budget -- the SHORTER the
+        # move, the tighter the deadline, which is backwards. At the stock 0.5 s
+        # a scan's first approach fails with "Controller is taking too long to
+        # execute trajectory (expected upper bound 0.500000 seconds)" while the
+        # controller has already reported "Goal reached, success!" 7 ms in and
+        # the result takes 815 ms to arrive. 5 s costs only a later report of a
+        # genuinely stuck controller; a pass that goes wrong is already caught
+        # by min_fraction and the scan's trace accounting.
+        "trajectory_execution.allowed_goal_duration_margin": 5.0,
         "trajectory_execution.allowed_start_tolerance": 0.01,
     }
 
@@ -490,6 +569,13 @@ def generate_launch_description():
     )
     declared_arguments.append(
         DeclareLaunchArgument(
+            "azure_bracket",
+            default_value="",
+            description="Which bracket holds the Azure Kinect: ut, redo, none, or empty for the tooling's own default. See tari_ur_description/urdf/azure_bracket.urdf.xacro.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
             "launch_keyence",
             default_value="false",
             description="Launch Keyence laser profiler",
@@ -522,14 +608,14 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "description_file",
-            default_value="ur_withenvironment.urdf.xacro",
+            default_value="ur_cell.urdf.xacro",
             description="URDF/XACRO description file with the robot.",
         )
     )
     declared_arguments.append(
         DeclareLaunchArgument(
             "tari_package",
-            default_value="tari_ur_launch",
+            default_value="tari_ur_description",
             description="MoveIt config package with robot SRDF/XACRO files. Usually the argument \
         is not set, it enables use of a custom moveit config.",
         )
@@ -724,9 +810,9 @@ def generate_launch_description():
     )
     declared_arguments.append(
         DeclareLaunchArgument("tooling",
-                              default_value="newer",
+                              default_value="ec",
                               description="End of Arm Tooling Choice (old/new/newer)",
-                              choices=["old", "new", "newer"])
+                              choices=["old", "new", "ec", "rightangle_contact_ut", "immersion_ut"])
     )
 
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])

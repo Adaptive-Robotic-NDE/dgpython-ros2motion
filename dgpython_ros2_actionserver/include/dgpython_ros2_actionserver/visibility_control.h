@@ -1,13 +1,13 @@
 /*#######################################################################
 # AdaptiveNDE Project                                                   #
-# AFRL-ROS Package                                                      # 
+# dgpython_ros2_actionserver Package                                    #
 #########################################################################
 # Copyright 2023-2024 University of Dayton                              #
 #                                                                       #
-# Redistribution and use in source and binary forms, with or without    # 
+# Redistribution and use in source and binary forms, with or without    #
 # modification, are permitted provided that the following conditions    #
 # are met:                                                              #
-#                                                                       # 
+#                                                                       #
 # 1. Redistributions of source code must retain the above copyright     #
 #    notice, this list of conditions and the following disclaimer.      #
 # 2. Redistributions in binary form must reproduce the above copyright  #
@@ -35,20 +35,20 @@
 #                                                                       #
 # DISTRIBUTION A. Approved for public release: distribution unlimited.  #
 #########################################################################
-# File:  visibility_control.h                                                     
+# File:  visibility_control.h
 # Authors: OSRF, Tyler Lesthaeghe
-# Created: 2023-06-22                                                  
+# Created: 2023-06-22
 # Description:
 #   Visibility Control Macros
-# Derived From:                                                         
-#   visibility_control.h in demo_node_cpp package     
-#     under Apache 2.0 License                                           
+# Derived From:
+#   visibility_control.h in demo_node_cpp package
+#     under Apache 2.0 License
 #########################################################################
-# Revision Log                                                          
-# 
+# Revision Log
+#
 # 2023-06-22:  Initial Commit
 # 2024-02-21:  Added License Info
-# 
+#
 #########################################################################
 # Development Notes
 #

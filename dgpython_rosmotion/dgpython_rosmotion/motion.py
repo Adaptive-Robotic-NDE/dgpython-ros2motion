@@ -1,13 +1,13 @@
 #########################################################################
 # AdaptiveNDE Project                                                   #
-# AFRL-ROS Package                                                      # 
+# dgpython_rosmotion Package                                            #
 #########################################################################
 # Copyright 2023-2024 University of Dayton                              #
 #                                                                       #
-# Redistribution and use in source and binary forms, with or without    # 
+# Redistribution and use in source and binary forms, with or without    #
 # modification, are permitted provided that the following conditions    #
 # are met:                                                              #
-#                                                                       # 
+#                                                                       #
 # 1. Redistributions of source code must retain the above copyright     #
 #    notice, this list of conditions and the following disclaimer.      #
 # 2. Redistributions in binary form must reproduce the above copyright  #
@@ -35,19 +35,20 @@
 #                                                                       #
 # DISTRIBUTION A. Approved for public release: distribution unlimited.  #
 #########################################################################
-# File:  motiontest.dgp                                                     
+# File:  motiontest.dgp
 # Authors: Tyler Lesthaeghe
-# Created: 2023-06-22                                                  
+# Created: 2023-06-22
 # Description:
 #   Dataguzzler-Python module for communicating with ROS from Dataguzzler
-# Derived From:                                                         
-#                                             
+# Derived From:
+#
 #########################################################################
-# Revision Log                                                          
-# 
+# Revision Log
+#
 # 2023-06-22:  Initial Commit
 # 2023-11-07:  Bugfixes for python version and rate limiting
-# 
+# 2026-09-29:  Hardening Complete Automated Pipeline
+#
 #########################################################################
 # Development Notes
 #
@@ -91,6 +92,9 @@ from apriltag_msgs.msg import AprilTagDetectionArray
 from yolo_msgs.msg import DetectionArray
 from sensor_msgs.msg import Image, CameraInfo, JointState
 from moveit_msgs.srv import GetPositionIK, GetStateValidity
+import os
+from rcl_interfaces.srv import GetParameters, SetParameters
+from rcl_interfaces.msg import Parameter as RclParameter, ParameterValue, ParameterType
 from moveit_msgs.msg import RobotState
 from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectoryPoint
@@ -374,7 +378,7 @@ class motion(Node, metaclass=dgpy_Module):
     #'AcquisitionType': ('Specifies continuous or finite sampling -- Valid options are "CONTINUOUS" or "FINITE"', const.AcquisitionType.FINITE, lambda val: {"CONTINUOUS": const.AcquisitionType.CONTINUOUS, "FINITE": const.AcquisitionType.FINITE}[val], lambda val: {const.AcquisitionType.CONTINUOUS: 'CONTINUOUS', const.AcquisitionType.FINITE: 'FINITE'}[val], lambda val: {const.AcquisitionType.CONTINUOUS: 'CONTINUOUS', const.AcquisitionType.FINITE: 'FINITE'}[val], lambda val: snde.metadatum('daq_params-AcquisitionType', val)),
     #'SampsPerChan': ('Number of Data Points Per Channel', 100, lambda val: val, lambda val: val, lambda val: val, lambda val: snde.metadatum('daq_params-SampsPerChan', val))}
 
-    def __init__(self, module_name, recdb, from_frame_rel, to_frame_rel, eoat_mesh=None, depth_image_topic='/azure/depth/image_raw', camera_info='/azure/rgb/camera_info', **kwargs):
+    def __init__(self, module_name, recdb, from_frame_rel, to_frame_rel, eoat_mesh=None, depth_image_topic=None, camera_info=None, **kwargs):
         super().__init__('dataguzzler_frame_publisher')
         self.get_logger().info("Dataguzzler Frame Publisher Module Starting")
         self.laser_scan_array_pub = self.create_publisher(PoseArray, 'laser_scan_array', 10)
@@ -386,8 +390,15 @@ class motion(Node, metaclass=dgpy_Module):
         self.gpio_sub = self.create_subscription(IOStates, '/io_and_status_controller/io_states', self.gpio_callback, 10)
         self.detect_sub = self.create_subscription(DetectionArray, '/yolo/detections', self.detection_callback, 10)
         self.tracking_sub = self.create_subscription(DetectionArray, '/yolo/tracking', self.tracking_callback, 10)
-        self.depth_sub = self.create_subscription(Image, depth_image_topic, self.depth_image_callback, 10)
-        self.camera_info_sub = self.create_subscription(CameraInfo, camera_info, self.camera_info_callback, 10)
+        # Opt-in. Only EddyCurrentScan.dgp and ClientScannerTest.dgp read
+        # ros.depth_image, and a standing subscription drags every frame through
+        # rclpy in the acquisition process -- 6 MB at 30 Hz for the registered
+        # depth a real Azure publishes. Those configs pass the cell manifest's
+        # topics; anything else gets no subscription at all.
+        if depth_image_topic:
+            self.depth_sub = self.create_subscription(Image, depth_image_topic, self.depth_image_callback, 10)
+        if camera_info:
+            self.camera_info_sub = self.create_subscription(CameraInfo, camera_info, self.camera_info_callback, 10)
         self.force_sub = self.create_subscription(WrenchStamped, '/msg_sync/force_msg', self.force_callback, 10)
         self.pos_sub = self.create_subscription(TransformStamped, '/msg_sync/position_msg', self.position_callback, 10)
         self.click_sub = self.create_subscription(PointStamped, '/clicked_point', self.click_callback, 10)
@@ -479,8 +490,8 @@ class motion(Node, metaclass=dgpy_Module):
         # subscriptions use. Everything on a node shares one mutually exclusive
         # callback group unless told otherwise, which means a goal response or a
         # result response queues behind the TF, image and detection traffic this
-        # node also carries -- and TF alone runs at 200 Hz. That is what made a
-        # Move() round trip cost ~0.5 s against ~20 ms of actual motion.
+        # node also carries -- and TF alone runs at 200 Hz. On the default group
+        # a Move() round trip costs ~0.5 s against ~20 ms of actual motion.
         self._action_callback_group = ReentrantCallbackGroup()
 
         self._joint_move_client = PatchRclpyIssue1123(self, JointMove, 'execute_joint_move', callback_group=self._action_callback_group)
@@ -500,11 +511,29 @@ class motion(Node, metaclass=dgpy_Module):
         # into it. See ApproachInConfiguration().
         self._compute_ik_client = self.create_client(
             GetPositionIK, '/compute_ik', callback_group=self._action_callback_group)
+        # The arm's own configuration, kept so IK can be seeded from where the
+        # arm actually IS. Six doubles at the controller's rate, on the action
+        # callback group so it does not queue behind the TF this node carries at
+        # 200 Hz. ApproachInConfiguration() is what needs it: an UNSEEDED solve
+        # picks the arm branch by descent, and on this arm wrist_3 has +/-360
+        # degrees to descend into, so it can leave a sweep at wrist_3 = -277
+        # degrees, from which no pose goal can be planned at all.
+        self._joint_state = None
+        self.joint_state_sub = self.create_subscription(
+            JointState, '/joint_states', self.joint_state_callback, 10,
+            callback_group=self._action_callback_group)
         # Used only by the fallback in MoveJoints(): when MoveIt cannot plan the
         # joint move for us, this is what stands between an unchecked joint
         # command and the fixturing.
         self._state_validity_client = self.create_client(
             GetStateValidity, '/check_state_validity',
+            callback_group=self._action_callback_group)
+        # move_group's own parameters, for SetIKMode(). See that method.
+        self._set_param_client = self.create_client(
+            SetParameters, '/move_group/set_parameters',
+            callback_group=self._action_callback_group)
+        self._get_param_client = self.create_client(
+            GetParameters, '/move_group/get_parameters',
             callback_group=self._action_callback_group)
         # Which trajectory controller is live differs between the simulated cell
         # and the real robot: the UR driver runs scaled_joint_trajectory_controller
@@ -547,6 +576,10 @@ class motion(Node, metaclass=dgpy_Module):
 
     def gpio_callback(self, msg):
         self.svd_msg = msg
+        return
+
+    def joint_state_callback(self, msg):
+        self._joint_state = msg
         return
     
     def tracking_callback(self, msg):
@@ -757,9 +790,25 @@ class motion(Node, metaclass=dgpy_Module):
             self.get_logger().error(f'Wrong type: {msg.__class__}')
             return False
 
+        # ik_frame belongs in this line, because it says WHICH FRAME the poses
+        # place, and that need not be the frame the sweep is measuring with. The
+        # default is probe_end, the eddy-current probe's tip; the Keyence's
+        # measurement point, lj_v7080_optical_frame, sits (-75.2, -2.2, -34.2) mm
+        # from it on the same mounting plate. A Keyence sweep is planned so the
+        # OPTICAL frame lands on the surface and the poses are then offset back
+        # to probe_end (mesh_reconstruction.dpi, _offset_path_in_tool_frame), so
+        # probe_end is the right ik_frame -- and the probe tip ends up 75 mm to
+        # one side of whatever the sensor is looking at.
+        #
+        # COLLISION HAZARD over anything but a flat surface: with the optical
+        # frame correctly standing off, probe_end can sit within a millimetre or
+        # two of a curved specimen, and the probe barrel is 7.1 mm in radius, so
+        # the probe is driven into the part. Logging the frame is what makes
+        # that legible in the take afterwards; plan such sweeps with collision
+        # checking on and the specimen in the planning scene.
         self.get_logger().info(
             f'execute_raster: {len(goal_msg.pose_array.poses)} poses, vel={vel}, acc={acc}, '
-            f'min_fraction={min_fraction}')
+            f'min_fraction={min_fraction}, ik_frame={goal_msg.ik_frame}')
 
         # send_goal_bounded, not send_goal -- see the note above JointMove().
         # result_timeout is the long one here: mtc_hub_node accepts immediately
@@ -786,8 +835,7 @@ class motion(Node, metaclass=dgpy_Module):
             # handler runs on a detached thread while the node is spun by a
             # single-threaded executor, the hang takes the WHOLE node down: it
             # stops answering execute_raster and execute_joint_move too, and the
-            # only recovery is restarting mtc_node. The Pose branch below always
-            # set the frame; this one never did.
+            # only recovery is restarting mtc_node.
             goal_msg.target_pose.header.stamp = rclpy.time.Time().to_msg()
             goal_msg.target_pose.header.frame_id = (msg.header.frame_id
                                                     or self.from_frame_rel)
@@ -809,23 +857,21 @@ class motion(Node, metaclass=dgpy_Module):
             # C converter ABORTS THE WHOLE PROCESS when the goal is serialised:
             #   builtin_interfaces__msg__time__convert_from_py: Assertion
             #   `strncmp("builtin_interfaces.msg._time.Time", ...) == 0' failed
-            # No traceback, no exception -- SIGABRT. Nothing in this tree passed
-            # a bare Pose to FreeMove until the reconstruction sweep did, which
-            # is why it survived; the TransformStamped branch was written
-            # correctly when the frame_id fix went in and this one was missed.
-            # to_frame_rel, NOT from_frame_rel, and this is the same fault
+            # No traceback, no exception -- SIGABRT.
+            #
+            # to_frame_rel, NOT from_frame_rel, and this is the same trap
             # SolveIK() has a paragraph about: an unstamped Pose is in the
             # PLANNING frame, not the tool's own. For motion('ros', recdb,
             # 'probe_end', 'world') from_frame_rel is 'probe_end', so a bare
-            # Pose in world coordinates was handed to MoveIt as a pose relative
-            # to the very link being moved. mtc_hub_node logs it plainly --
+            # Pose in world coordinates would be handed to MoveIt as a pose
+            # relative to the very link being moved. mtc_hub_node logs that
+            # plainly --
             #   Creating Pipeline Task -> Goal frame: 'probe_end' ...
             #   [ompl] Unable to sample any valid states for goal tree
             # -- and the goal is simply ABORTED, with a target that is
             # individually IK-solvable and collision-free when asked about
-            # properly. The TransformStamped branch above never had this because
-            # ros.t carries frame_id='world'; only callers passing a bare Pose
-            # were affected, which until the reconstruction sweep was nobody.
+            # properly. Only callers passing a bare Pose are exposed: a
+            # TransformStamped from ros.t carries frame_id='world'.
             goal_msg.target_pose.header.stamp = rclpy.time.Time().to_msg()
             goal_msg.target_pose.header.frame_id = self.to_frame_rel
             goal_msg.target_pose.pose = msg
@@ -897,6 +943,59 @@ class motion(Node, metaclass=dgpy_Module):
     UR_JOINTS = ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
                  "wrist_1_joint", "wrist_2_joint", "wrist_3_joint")
 
+    #: How far wrist_3 may turn before the tooling's cables object, as
+    #: (lo, hi) ABSOLUTE JOINT VALUES in radians -- a plain interval, NOT read
+    #: modulo a turn. (radians(31), radians(301)) admits +247 degrees and
+    #: refuses -113, which are the same tool orientation and not the same place
+    #: for a cable: one has a turn wound into it that the other has not. This is
+    #: the same rule ROS-Scanning's cable_envelope.dpi applies, and the two have
+    #: to agree or a plan is checked against one meaning and flown against the
+    #: other.
+    #:
+    #: None, the default, is no constraint at all: the arm genuinely has +/-360
+    #: degrees there and plenty of work needs it, so the limit is a property of
+    #: what is bolted on and how it is cabled and belongs to the cell config,
+    #: not to this module and not to joint_limits.yaml. A config sets it once
+    #: (ros.WRIST3_BAND = (lo, hi)) and ApproachInConfiguration() then refuses
+    #: to enter a pass that would run the cables outside it.
+    WRIST3_BAND = None
+
+    @staticmethod
+    def _wrist3_span_in_band(a, b, band):
+        """Does the straight joint-space sweep from `a` to `b` stay in `band`?
+
+        A joint move interpolates linearly, so the wrist passes through every
+        value between the two -- checking only the endpoints would accept a
+        pass that leaves the band in the middle. The band is an absolute
+        interval, so this is just "both ends inside".
+        """
+        if band is None:
+            return True
+        lo, hi = float(band[0]), float(band[1])
+        return (lo - 1e-9 <= min(float(a), float(b))
+                and max(float(a), float(b)) <= hi + 1e-9)
+
+    @staticmethod
+    def _wrist3_band_centre(band):
+        """The middle of the band, in radians, as a seed value."""
+        return 0.5*(float(band[0]) + float(band[1]))
+
+    def CurrentJoints(self, joint_names=None):
+        """The arm's present configuration in UR_JOINTS order, or None.
+
+        From the last /joint_states message. None means none has arrived -- no
+        controller, or the subscription has not caught up yet -- which callers
+        treat as "no seed available", not as an error.
+        """
+        msg = self._joint_state
+        if msg is None:
+            return None
+        found = dict(zip(msg.name, msg.position))
+        try:
+            return [float(found[j]) for j in (joint_names or self.UR_JOINTS)]
+        except KeyError:
+            return None
+
     def SolveIK(self, msg, seed=None, group="ur_manipulator", ik_frame="probe_end",
                 avoid_collisions=True, timeout=2.0):
         """Joint values for a pose, optionally in the same branch as `seed`.
@@ -909,14 +1008,15 @@ class motion(Node, metaclass=dgpy_Module):
         the joint values of a configuration you want to stay near and the solver
         returns the solution in that branch.
         """
-        # An unstamped pose is in the PLANNING frame, not the tool's own. This
-        # used to fall back to from_frame_rel, which for motion('ros', recdb,
-        # 'probe_end', 'world') is 'probe_end' -- so /compute_ik was asked for a
-        # pose relative to the very link it was solving for, and returned no
-        # solution for every target. It reads as an unreachable workspace: a
-        # toolpath over ground the raster scan covers daily came back 0 of 10
-        # solvable. to_frame_rel is the world frame this module was constructed
-        # with, which is what a caller handing over a bare Pose means.
+        # An unstamped pose is in the PLANNING frame, not the tool's own.
+        # Falling back to from_frame_rel -- 'probe_end' for motion('ros', recdb,
+        # 'probe_end', 'world') -- asks /compute_ik for a pose relative to the
+        # very link it is solving for, and it then returns no solution for any
+        # target. That reads as an unreachable workspace rather than as a frame
+        # error: a toolpath over ground the raster scan covers routinely comes
+        # back 0 of 10 solvable. to_frame_rel is the world frame this module was
+        # constructed with, which is what a caller handing over a bare Pose
+        # means.
         if isinstance(msg, TransformStamped):
             pose = Pose()
             pose.position.x = msg.transform.translation.x
@@ -944,13 +1044,27 @@ class motion(Node, metaclass=dgpy_Module):
         ps.header.frame_id = frame
         ps.pose = pose
         req.ik_request.pose_stamped = ps
+        # is_diff=True in BOTH branches, and it is not optional. A default
+        # constructed RobotState has is_diff false and an empty joint_state, and
+        # move_group answers that with
+        #
+        #   [moveit_robot_state.conversions]: Found empty JointState message
+        #
+        # at ERROR severity before quietly falling back to the current state --
+        # one per unseeded solve, and the answer then depends on that fallback
+        # rather than on anything this call said. With is_diff set, "no seed"
+        # means what it should: start from the state the planning scene
+        # currently holds. With a seed it means the same thing with these six
+        # joints overridden, which is what a seed IS. Same reasoning as
+        # CheckStateValidity below.
+        rs = RobotState()
+        rs.is_diff = True
         if seed is not None:
-            rs = RobotState()
             js = JointState()
             js.name = list(self.UR_JOINTS)
             js.position = [float(v) for v in seed]
             rs.joint_state = js
-            req.ik_request.robot_state = rs
+        req.ik_request.robot_state = rs
 
         if not self._compute_ik_client.wait_for_service(timeout_sec=5.0):
             return None
@@ -968,6 +1082,258 @@ class motion(Node, metaclass=dgpy_Module):
             return [found[j] for j in self.UR_JOINTS]
         except KeyError:
             return None
+
+    IK_MODE_PARAM = "robot_description_kinematics.ur_manipulator.mode"
+
+    def IKMode(self, timeout=5.0):
+        """move_group's pick_ik search mode: 'global' or 'local'.
+
+        Returns None if move_group is not up, or is not running pick_ik.
+        """
+        if not self._get_param_client.wait_for_service(timeout_sec=timeout):
+            return None
+        req = GetParameters.Request()
+        req.names = [self.IK_MODE_PARAM]
+        future = self._get_param_client.call_async(req)
+        event = threading.Event()
+        future.add_done_callback(lambda f: event.set())
+        if not event.wait(timeout):
+            return None
+        res = future.result()
+        if res is None or not res.values:
+            return None
+        value = res.values[0]
+        if value.type != ParameterType.PARAMETER_STRING:
+            return None
+        return value.string_value or None
+
+    def SetIKMode(self, mode, timeout=5.0):
+        """Switch move_group's IK between searching globally and staying put.
+
+        Returns the mode that was in force before, so a caller can restore it.
+
+            'global'  find a solution anywhere, changing arm branch if that is
+                      what it takes. Right for interactive work: dragging RViz
+                      markers, teaching corners, one-off moves to a pose the arm
+                      cannot reach in its current configuration. This is what
+                      ur_moveit.launch.py starts move_group in.
+            'local'   stay in the seed's branch. Right while FOLLOWING a path,
+                      and required by anything that seeds IK on purpose --
+                      ApproachInConfiguration() solves the far end of a row and
+                      seeds the near end from it precisely so the row can be
+                      completed in one configuration, and a global solver is
+                      free to ignore that and hand back the other branch. A
+                      point-to-point scan needs it for the same reason.
+
+        Only move_group is switched. mtc_node runs local always: following a
+        planned path is all it does.
+
+        Takes effect on the next IK call -- pick_ik re-reads its parameters
+        rather than caching them at load -- so there is no relaunch and no
+        need to stop a cell to change it. Equivalent by hand:
+
+            ros2 param set /move_group \
+                robot_description_kinematics.ur_manipulator.mode local
+        """
+        mode = str(mode)
+        if mode not in ("global", "local"):
+            raise ValueError("IK mode must be 'global' or 'local', not %r" % (mode,))
+        previous = self.IKMode(timeout=timeout)
+        if previous == mode:
+            return previous
+        if not self._set_param_client.wait_for_service(timeout_sec=timeout):
+            raise RuntimeError(
+                "/move_group/set_parameters is not available; is the cell running?")
+        req = SetParameters.Request()
+        param = RclParameter()
+        param.name = self.IK_MODE_PARAM
+        param.value = ParameterValue(type=ParameterType.PARAMETER_STRING,
+                                     string_value=mode)
+        req.parameters = [param]
+        future = self._set_param_client.call_async(req)
+        event = threading.Event()
+        future.add_done_callback(lambda f: event.set())
+        if not event.wait(timeout):
+            raise RuntimeError("timed out setting the IK mode")
+        res = future.result()
+        if res is None or not res.results or not res.results[0].successful:
+            reason = ""
+            if res is not None and res.results:
+                reason = res.results[0].reason
+            raise RuntimeError(
+                "move_group refused the IK mode change: %s. If move_group is "
+                "running the stock KDL solver rather than pick_ik there is no "
+                "such parameter -- check that ur_moveit.launch.py is loading "
+                "tari_ur_description/config/kinematics.yaml." % (reason or "no reason given",))
+        return previous
+
+    # ------------------------------------------------------------------
+    # Motion profiles: the IK solver's settings for a kind of motion.
+    #
+    # Defined once, in tari_ur_description/config/motion_profiles.yaml; see
+    # that file for what each setting does and the measurements behind the
+    # values. SetIKMode() above is the single-knob, move_group-only ancestor
+    # of this and is kept for callers that still use it.
+    # ------------------------------------------------------------------
+
+    MOTION_PROFILES = ("tari_ur_description", os.path.join("config", "motion_profiles.yaml"))
+
+    def MotionProfiles(self):
+        """The profile file, parsed: {"group", "nodes", "profiles"}.
+
+        Read on every call rather than cached, so an edited file is picked up
+        without restarting the config.
+        """
+        import yaml
+        from ament_index_python.packages import get_package_share_directory
+        package, rel = self.MOTION_PROFILES
+        with open(os.path.join(get_package_share_directory(package), rel)) as f:
+            return yaml.safe_load(f)
+
+    def MotionProfile(self, name):
+        """{node: {parameter: value}} that profile `name` asks for."""
+        spec = self.MotionProfiles()
+        profiles = spec.get("profiles") or {}
+        if name not in profiles:
+            raise ValueError("no motion profile %r; defined: %s"
+                             % (name, ", ".join(sorted(profiles))))
+        prof = profiles[name] or {}
+        common = dict(prof.get("parameters") or {})
+        out = {}
+        for node in spec.get("nodes") or []:
+            values = dict(common)
+            values.update((prof.get("nodes") or {}).get(node) or {})
+            out[node] = values
+        return out
+
+    def _motion_param_prefix(self):
+        return "robot_description_kinematics.%s." % (
+            self.MotionProfiles().get("group") or "ur_manipulator")
+
+    def _motion_param_clients(self, node):
+        # Created on first use: which nodes are asked is data, not code.
+        if not hasattr(self, "_motion_clients"):
+            self._motion_clients = {}
+        if node not in self._motion_clients:
+            self._motion_clients[node] = (
+                self.create_client(GetParameters, node + "/get_parameters",
+                                   callback_group=self._action_callback_group),
+                self.create_client(SetParameters, node + "/set_parameters",
+                                   callback_group=self._action_callback_group))
+        return self._motion_clients[node]
+
+    @staticmethod
+    def _call_and_wait(client, req, timeout):
+        future = client.call_async(req)
+        event = threading.Event()
+        future.add_done_callback(lambda f: event.set())
+        if not event.wait(timeout):
+            return None
+        return future.result()
+
+    def GetMotionParameters(self, names, nodes=None, timeout=5.0):
+        """{node: {parameter: value}} for `names`, from every node that answers.
+
+        A node that is not up, or that does not have the parameters (not
+        running pick_ik), is left out rather than reported as an error.
+        """
+        prefix = self._motion_param_prefix()
+        names = list(names)
+        out = {}
+        for node in nodes or self.MotionProfiles().get("nodes") or []:
+            get, _set = self._motion_param_clients(node)
+            if not get.wait_for_service(timeout_sec=timeout):
+                continue
+            req = GetParameters.Request()
+            req.names = [prefix + n for n in names]
+            res = self._call_and_wait(get, req, timeout)
+            if res is None or len(res.values) != len(names):
+                continue
+            values = {}
+            for n, v in zip(names, res.values):
+                if v.type == ParameterType.PARAMETER_STRING:
+                    values[n] = v.string_value
+                elif v.type == ParameterType.PARAMETER_BOOL:
+                    values[n] = v.bool_value
+                elif v.type == ParameterType.PARAMETER_INTEGER:
+                    values[n] = v.integer_value
+                elif v.type == ParameterType.PARAMETER_DOUBLE:
+                    values[n] = v.double_value
+            if len(values) == len(names):
+                out[node] = values
+        return out
+
+    def SetMotionParameters(self, values, timeout=5.0):
+        """Apply {node: {parameter: value}}; return what was there before.
+
+        The return value has the same shape, so it can be handed straight back
+        to put things as they were. Each value is sent as the type the node
+        already holds, so a YAML `0` goes to a double parameter as 0.0 rather
+        than being refused as an integer. A node that is not up is skipped with
+        a warning; a node that is up and refuses a value raises.
+        """
+        prefix = self._motion_param_prefix()
+        names = sorted({n for per_node in values.values() for n in per_node})
+        before = self.GetMotionParameters(names, nodes=list(values), timeout=timeout)
+        previous = {}
+        for node, per_node in values.items():
+            if node not in before:
+                self.get_logger().warning(
+                    "%s is not up, or is not running pick_ik; its solver "
+                    "parameters were left alone" % node)
+                continue
+            _get, setter = self._motion_param_clients(node)
+            req = SetParameters.Request()
+            for n, v in per_node.items():
+                param = RclParameter()
+                param.name = prefix + n
+                held = before[node][n]
+                if isinstance(held, str):
+                    param.value = ParameterValue(type=ParameterType.PARAMETER_STRING,
+                                                 string_value=str(v))
+                elif isinstance(held, bool):
+                    param.value = ParameterValue(type=ParameterType.PARAMETER_BOOL,
+                                                 bool_value=bool(v))
+                elif isinstance(held, int):
+                    param.value = ParameterValue(type=ParameterType.PARAMETER_INTEGER,
+                                                 integer_value=int(v))
+                else:
+                    param.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE,
+                                                 double_value=float(v))
+                req.parameters.append(param)
+            res = self._call_and_wait(setter, req, timeout)
+            if res is None:
+                raise RuntimeError("%s did not answer set_parameters" % node)
+            refused = [(p.name, r.reason) for p, r in zip(req.parameters, res.results)
+                       if not r.successful]
+            if refused:
+                raise RuntimeError("%s refused %s" % (node, refused))
+            previous[node] = {n: before[node][n] for n in per_node}
+        return previous
+
+    def SetMotionProfile(self, name, timeout=5.0):
+        """Put every IK-solving node in profile `name`.
+
+        Returns the previous values; pass them to SetMotionParameters() to
+        restore. Takes effect on each node's next IK call, with no restart.
+        """
+        return self.SetMotionParameters(self.MotionProfile(name), timeout=timeout)
+
+    def WhichMotionProfile(self, timeout=5.0):
+        """The profile every running node currently matches, or None."""
+        spec = self.MotionProfiles()
+        for name in sorted(spec.get("profiles") or {}):
+            want = self.MotionProfile(name)
+            names = sorted({n for per_node in want.values() for n in per_node})
+            have = self.GetMotionParameters(names, nodes=list(want), timeout=timeout)
+            if have and all(
+                    all((abs(have[node][n] - v) <= 1e-12 * max(1.0, abs(v)))
+                        if isinstance(v, float) and not isinstance(v, bool)
+                        else have[node][n] == v
+                        for n, v in want[node].items())
+                    for node in have):
+                return name
+        return None
 
     def CheckStateValidity(self, positions, joint_names=None, group="ur_manipulator",
                            allow_contact_links=None, allow_contact_objects=None,
@@ -1058,7 +1424,8 @@ class motion(Node, metaclass=dgpy_Module):
     def MoveJoints(self, positions, secs=5.0, joint_names=None,
                    goal_timeout=15.0, result_timeout=120.0,
                    plan=True, validate=True,
-                   allow_contact_links=None, allow_contact_objects=None):
+                   allow_contact_links=None, allow_contact_objects=None,
+                   vel=None, acc=None):
         """Drive the arm to an explicit joint configuration.
 
         The configuration is the point. A pose goal lets the planner pick
@@ -1086,17 +1453,29 @@ class motion(Node, metaclass=dgpy_Module):
         allow_contact_links / allow_contact_objects declare expected contact --
         contact scanning demands contact, so the probe touching the specimen
         cannot be an error. They are honoured by both paths.
+
+        vel / acc are MoveIt's velocity and acceleration SCALING for the planned
+        path (fractions of the joint limits; JointMove's 0.1 when None). A joint
+        move's tool speed is not bounded by them in Cartesian terms -- measure it
+        (ROS-Scanning's dry run reports the peak) before trusting a number near
+        people or parts. Ignored by the direct fallback, which uses `secs`.
         """
         names = list(joint_names or self.UR_JOINTS)
         positions = [float(v) for v in positions]
 
         if plan:
             if self._joint_move_client.wait_for_server(timeout_sec=5.0):
+                scaling = {}
+                if vel is not None:
+                    scaling["vel"] = float(vel)
+                if acc is not None:
+                    scaling["acc"] = float(acc)
                 result = self.JointMove(positions, joint_names=names,
                                         goal_timeout=goal_timeout,
                                         result_timeout=result_timeout,
                                         allow_contact_links=allow_contact_links,
-                                        allow_contact_objects=allow_contact_objects)
+                                        allow_contact_objects=allow_contact_objects,
+                                        **scaling)
                 if getattr(getattr(result, "result", None), "success", False):
                     return result
                 self.get_logger().error(
@@ -1158,21 +1537,21 @@ class motion(Node, metaclass=dgpy_Module):
 
     def ApproachInConfiguration(self, start, end, secs=6.0,
                                 plan=True, allow_contact_links=None,
-                                allow_contact_objects=None, **kwargs):
+                                allow_contact_objects=None, vel=None, acc=None,
+                                wrist3_band=None, **kwargs):
         """Put the arm at `start` in a configuration that can also reach `end`.
 
-        This is the fix for silently truncated raster rows. Moving to the start
-        pose the ordinary way lets the planner choose any configuration that
-        reaches it, and the ones it picks routinely cannot follow the row to the
-        far end -- computeCartesianPath then truncates partway and, before it was
-        made to fail, executed the short path as if nothing had happened. Every
-        pose on the row is individually reachable; it is the configuration the
-        row is entered in that decides how far it gets.
+        This is what keeps raster rows from truncating. Moving to the start pose
+        the ordinary way lets the planner choose any configuration that reaches
+        it, and the ones it picks routinely cannot follow the row to the far end
+        -- computeCartesianPath then truncates partway. Every pose on the row is
+        individually reachable; it is the configuration the row is entered in
+        that decides how far it gets.
 
         Solving the END first and seeding the START from it picks a configuration
         that demonstrably reaches both, so the straight line between them stays
-        in one branch. Measured on a 60 waypoint, 0.30 m row that had been
-        completing 65-88%: 100.0%.
+        in one branch. On a 60 waypoint, 0.30 m row that raises completion from
+        65-88% to 100%.
 
         The move itself goes through MoveIt by default (see MoveJoints), so the
         chosen configuration is reached exactly and the path to it is collision
@@ -1180,24 +1559,75 @@ class motion(Node, metaclass=dgpy_Module):
         separate concerns, and only the first one needs the planner kept out of
         it.
 
-        Returns the joint configuration used, or None if IK failed or the move
-        was refused -- in which case the caller should fall back to an ordinary
-        Move and will probably get a short row, or stop.
+        AND THE FAR END IS SOLVED FROM WHERE THE ARM IS. Solved UNSEEDED, one
+        solve chooses the configuration for a whole pass: with wrist_3 free over
+        +/-360 degrees and move_group's minimal_displacement_weight at 0, the
+        solver returns whatever descent finds, which is routinely a turn away
+        from the arm's present branch. That is a wrist_3 traverse of up to a full
+        circle before the pass even starts, and it can leave the arm at wrist_3 =
+        -277 degrees, from which no pose goal can be planned at all. Seeding from
+        /joint_states costs nothing and asks for the nearest branch.
+
+        WRIST3_BAND, when the cell sets one, is a HARD LIMIT: a configuration
+        whose wrist_3 sweep leaves the band is retried once with the seed's
+        wrist_3 moved to the band centre, and refused if that does not help.
+        Refusing is the point -- the cables on this tooling do not survive a
+        wrist_3 angle outside the band, and a sweep that walks through it has to
+        be stopped by hand. With WRIST3_BAND None (the default) nothing below is
+        checked and the behaviour is exactly the seeded solve.
+
+        Returns the joint configuration used, or None if IK failed, the wrist
+        band could not be met, or the move was refused -- in which case the
+        caller should fall back to an ordinary Move and will probably get a
+        short row, or stop.
+
+        vel / acc go to MoveJoints (MoveIt scaling; None keeps its default).
+        kwargs go to SolveIK.
         """
-        q_end = self.SolveIK(end, **kwargs)
+        band = self.WRIST3_BAND if wrist3_band is None else wrist3_band
+        # The arm's own configuration, so the solver is asked for the branch it
+        # is already in rather than for any branch at all. None (no
+        # /joint_states yet) leaves the solve unseeded.
+        seed = kwargs.pop("seed", None)
+        if seed is None:
+            seed = self.CurrentJoints()
+        q_end = self.SolveIK(end, seed=seed, **kwargs)
         if q_end is None:
             return None
         q_start = self.SolveIK(start, seed=q_end, **kwargs)
         if q_start is None:
             return None
+        if band is not None and not self._wrist3_span_in_band(q_start[5],
+                                                              q_end[5], band):
+            # Same pose, wrist a turn away: ask again from the middle of the
+            # band. One retry, not a search -- a UR has exactly one other
+            # wrist_3 within its travel for a given orientation, so if the
+            # centre of the band does not reach it, nothing will.
+            retry = list(q_end)
+            retry[5] = self._wrist3_band_centre(band)
+            alt_end = self.SolveIK(end, seed=retry, **kwargs)
+            alt_start = (None if alt_end is None
+                         else self.SolveIK(start, seed=alt_end, **kwargs))
+            if alt_start is not None and self._wrist3_span_in_band(
+                    alt_start[5], alt_end[5], band):
+                q_start, q_end = alt_start, alt_end
+            else:
+                self.get_logger().error(
+                    "refusing to enter this pass: it needs wrist_3 from %.1f to "
+                    "%.1f deg, which leaves the cable band %.1f..%.1f deg, and "
+                    "reseeding at the band centre did not find another branch"
+                    % (math.degrees(q_start[5]), math.degrees(q_end[5]),
+                       math.degrees(band[0]), math.degrees(band[1])))
+                return None
         result = self.MoveJoints(q_start, secs=secs, plan=plan,
                                  allow_contact_links=allow_contact_links,
-                                 allow_contact_objects=allow_contact_objects)
+                                 allow_contact_objects=allow_contact_objects,
+                                 vel=vel, acc=acc)
         if result is None:
             return None
         # The planned path reports whether it executed. The direct fallback
         # returns the controller's own result, which has no .result.success --
-        # treat anything that came back at all as commanded, as before.
+        # anything that came back at all counts as commanded.
         inner = getattr(result, "result", None)
         if inner is not None and hasattr(inner, "success") and not inner.success:
             return None

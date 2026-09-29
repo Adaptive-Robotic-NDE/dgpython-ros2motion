@@ -1,13 +1,13 @@
 #########################################################################
 # AdaptiveNDE Project                                                   #
-# AFRL-ROS Package                                                      # 
+# dgpython_rosmotion Package                                            #
 #########################################################################
 # Copyright 2023-2024 University of Dayton                              #
 #                                                                       #
-# Redistribution and use in source and binary forms, with or without    # 
+# Redistribution and use in source and binary forms, with or without    #
 # modification, are permitted provided that the following conditions    #
 # are met:                                                              #
-#                                                                       # 
+#                                                                       #
 # 1. Redistributions of source code must retain the above copyright     #
 #    notice, this list of conditions and the following disclaimer.      #
 # 2. Redistributions in binary form must reproduce the above copyright  #
@@ -35,18 +35,19 @@
 #                                                                       #
 # DISTRIBUTION A. Approved for public release: distribution unlimited.  #
 #########################################################################
-# File:  scannertest.launch.py                                                     
+# File:  scannertest.launch.py
 # Authors: Tyler Lesthaeghe
-# Created: 2023-06-22                                                  
+# Created: 2023-06-22
 # Description:
 #   Test launch file for Dataguzzler-Python
-# Derived From:                                                         
-#                                             
+# Derived From:
+#
 #########################################################################
-# Revision Log                                                          
-# 
+# Revision Log
+#
 # 2023-06-22:  Initial Commit
-# 
+# 2026-09-29:  Hardening Complete Automated Pipeline
+#
 #########################################################################
 # Development Notes
 #
@@ -56,6 +57,7 @@
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess
 from launch.substitutions import LaunchConfiguration,PathJoinSubstitution
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 

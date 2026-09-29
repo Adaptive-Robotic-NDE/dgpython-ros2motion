@@ -1,13 +1,13 @@
 #########################################################################
 # AdaptiveNDE Project                                                   #
-# AFRL-ROS Package                                                      # 
+# dgpython-ros2motion Package                                           #
 #########################################################################
 # Copyright 2023-2024 University of Dayton                              #
 #                                                                       #
-# Redistribution and use in source and binary forms, with or without    # 
+# Redistribution and use in source and binary forms, with or without    #
 # modification, are permitted provided that the following conditions    #
 # are met:                                                              #
-#                                                                       # 
+#                                                                       #
 # 1. Redistributions of source code must retain the above copyright     #
 #    notice, this list of conditions and the following disclaimer.      #
 # 2. Redistributions in binary form must reproduce the above copyright  #
@@ -35,21 +35,21 @@
 #                                                                       #
 # DISTRIBUTION A. Approved for public release: distribution unlimited.  #
 #########################################################################
-# File:  .gitignore                                                     
-# Authors: Tyler Lesthaeghe                                             
-# Created: 2023-06-22                                                  
-# Derived From:                                                         
-#   https://github.com/github/gitignore/blob/main/Python.gitignore      
-#     under CC-0 1.0 License                                            
-#   https://github.com/github/gitignore/blob/main/C%2B%2B.gitignore     
-#     under CC-0 1.0 License                                            
-#   https://github.com/github/gitignore/blob/main/CMake.gitignore       
-#     under CC-0 1.0 License                                            
+# File:  .gitignore
+# Authors: Tyler Lesthaeghe
+# Created: 2023-06-22
+# Derived From:
+#   https://github.com/github/gitignore/blob/main/Python.gitignore
+#     under CC-0 1.0 License
+#   https://github.com/github/gitignore/blob/main/C%2B%2B.gitignore
+#     under CC-0 1.0 License
+#   https://github.com/github/gitignore/blob/main/CMake.gitignore
+#     under CC-0 1.0 License
 #########################################################################
-# Revision Log                                                          
-# 
+# Revision Log
+#
 # 2023-06-22:  Initial Commit
-# 
+#
 #########################################################################
 # Development Notes
 #
