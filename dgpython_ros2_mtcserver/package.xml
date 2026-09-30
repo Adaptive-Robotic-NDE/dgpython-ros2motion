@@ -7,6 +7,16 @@
   <maintainer email="liam.murray@udri.udayton.edu">labuser</maintainer>
   <license>TODO: License declaration</license>
 
+  <!-- Plugins launch/moveit_py.launch.py names as strings. Looked up by name at
+       run time, so nothing in the build refers to them and nothing but these
+       lines makes rosdep install them. The namespace in the config differs from
+       the package for two of the three: ompl_interface is in moveit_planners_ompl
+       and default_planner_request_adapters is in moveit_ros_planning.
+       Checked by tari_bringup/test/test_plugin_dependencies.py. -->
+  <exec_depend>moveit_planners_ompl</exec_depend>
+  <exec_depend>moveit_ros_planning</exec_depend>
+  <exec_depend>moveit_simple_controller_manager</exec_depend>
+
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
