@@ -756,7 +756,7 @@ class motion(Node, metaclass=dgpy_Module):
             self.get_logger().info('Goal failed to cancel')
 
     def CartesianMove(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end", goal_timeout=15.0,
-                      result_timeout=300.0, min_fraction=1.0):
+                      result_timeout=300.0, min_fraction=1.0, tool_speed_mps=0.0):
         """One continuous Cartesian move through a list of poses.
 
         min_fraction is the smallest acceptable fraction of the requested path.
@@ -777,6 +777,23 @@ class motion(Node, metaclass=dgpy_Module):
         goal_msg.acceleration = acc
         goal_msg.ik_frame = ik_frame
         goal_msg.min_fraction = float(min_fraction)
+        # The speed this move should actually run at, in m/s at ik_frame.
+        #
+        # `vel` IS NOT A SPEED. It is MoveIt's max_velocity_scaling_factor, a
+        # fraction of every joint's own limit, and what the tool does with that
+        # is the Jacobian's business -- it varies along the path and with
+        # configuration. Converting a wanted m/s into one of those fractions
+        # therefore needs a model of the arm, and the pipeline used a scalar
+        # curve fitted by driving one straight line at five speeds instead. It
+        # does not transfer: re-measuring moved the eddy-current figure from
+        # 0.0064 to 0.0047 for the same commanded 10 mm/s.
+        #
+        # Give this and the planner solves for the scaling against the real
+        # kinematics of the path -- parameterise, measure the tool speed,
+        # correct, repeat -- so `vel` becomes only the starting guess and the
+        # ceiling, and a move can come out slower than it but never faster.
+        # 0.0 leaves the old behaviour exactly as it was.
+        goal_msg.tool_speed_mps = float(tool_speed_mps)
 
         if isinstance(msg, PoseArray):
             goal_msg.pose_array = msg
@@ -808,7 +825,9 @@ class motion(Node, metaclass=dgpy_Module):
         # checking on and the specimen in the planning scene.
         self.get_logger().info(
             f'execute_raster: {len(goal_msg.pose_array.poses)} poses, vel={vel}, acc={acc}, '
-            f'min_fraction={min_fraction}, ik_frame={goal_msg.ik_frame}')
+            f'min_fraction={min_fraction}, ik_frame={goal_msg.ik_frame}'
+            + (f', tool_speed={tool_speed_mps*1000.0:.1f} mm/s (solved, not from the curve)'
+               if tool_speed_mps > 0.0 else ''))
 
         # send_goal_bounded, not send_goal -- see the note above JointMove().
         # result_timeout is the long one here: mtc_hub_node accepts immediately
