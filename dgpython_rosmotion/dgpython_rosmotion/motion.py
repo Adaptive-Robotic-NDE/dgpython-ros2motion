@@ -1440,6 +1440,50 @@ class motion(Node, metaclass=dgpy_Module):
             self.get_logger().error("unexpected contact: %s <-> %s" % bodies)
         return not unexpected
 
+    #: The largest joint velocity limit on this arm, rad/s.
+    #:
+    #: Used to turn a wanted DURATION into a velocity scaling. The largest limit
+    #: rather than the smallest, and rather than per-joint values, on purpose:
+    #: it makes the derived scaling smaller than strictly necessary, so a move
+    #: lands at or slower than the duration asked for. The real per-joint limits
+    #: live in the robot description and MoveIt enforces them regardless -- this
+    #: number only has to be an upper bound to be safe.
+    JOINT_VMAX_CEILING = 3.15      # UR wrists are pi rad/s; base/shoulder/elbow 2.09
+
+    def _scaling_for_duration(self, positions, joint_names, secs):
+        """Velocity scaling that makes this joint move take about `secs`.
+
+        -> the scaling, or None when it cannot be worked out (no joint states
+        yet, a joint missing from them, or a non-positive duration), in which
+        case the caller must leave the scaling alone rather than guess.
+
+        A joint-space scaling bounds joint velocity directly, so the duration it
+        implies is max_j(|dq_j| / (scaling * vmax_j)) -- no Jacobian, unlike the
+        Cartesian case. Inverting with a single upper-bound vmax gives a
+        slightly small scaling, which errs slow.
+        """
+        try:
+            secs = float(secs)
+        except (TypeError, ValueError):
+            return None
+        if not (secs > 0.0):
+            return None
+        state = self._joint_state
+        if state is None or not state.name:
+            return None
+        here = dict(zip(state.name, state.position))
+        worst = 0.0
+        for name, target in zip(joint_names, positions):
+            if name not in here:
+                return None          # cannot bound what we cannot measure
+            worst = max(worst, abs(float(target) - float(here[name])))
+        if worst <= 0.0:
+            return None              # nothing to travel; leave the scaling be
+        scaling = worst / (self.JOINT_VMAX_CEILING * secs)
+        # A scaling above 1 would be asking for more than the arm has; below a
+        # floor it stops being a speed and starts being a stall.
+        return min(max(scaling, 1e-4), 1.0)
+
     def MoveJoints(self, positions, secs=5.0, joint_names=None,
                    goal_timeout=15.0, result_timeout=120.0,
                    plan=True, validate=True,
@@ -1477,7 +1521,29 @@ class motion(Node, metaclass=dgpy_Module):
         path (fractions of the joint limits; JointMove's 0.1 when None). A joint
         move's tool speed is not bounded by them in Cartesian terms -- measure it
         (ROS-Scanning's dry run reports the peak) before trusting a number near
-        people or parts. Ignored by the direct fallback, which uses `secs`.
+        people or parts.
+
+        `secs` IS HONOURED ON BOTH ROUTES. It used to be read only by the direct
+        fallback, and that silently defeated the one bound a caller had on a
+        planned joint move's speed. The gauge approach in azure_gauge.dpi asks
+        for a duration precisely so that "the duration asked for cannot itself
+        be the thing that exceeds the limit", computed from the straight-line
+        distance at the near-the-part class limit of 10 mm/s -- and then got
+        JOINT_MOVE_SCALING's 0.015 instead, which measured 31.6 mm/s at the tool
+        over a 437.8 mm descent, 92% of wrist 1's scaled limit and three times
+        the class limit it had just computed for itself.
+
+        Unlike the Cartesian case, this conversion is sound: a joint-space
+        scaling bounds joint velocity directly, so the duration a scaling
+        implies is max_j(|dq_j| / (scaling * vmax_j)) with no Jacobian in it.
+        Inverting that for the scaling needs the joint limits, and the largest
+        one on the arm is used for every joint deliberately -- it makes the
+        scaling SMALLER than strictly required, so the move comes out at or
+        slower than `secs` rather than faster.
+
+        The result is a ceiling, never a floor: the scaling actually used is the
+        smaller of what the caller asked for and what the duration allows, so
+        passing `secs` can only slow a move down.
         """
         names = list(joint_names or self.UR_JOINTS)
         positions = [float(v) for v in positions]
@@ -1489,6 +1555,20 @@ class motion(Node, metaclass=dgpy_Module):
                     scaling["vel"] = float(vel)
                 if acc is not None:
                     scaling["acc"] = float(acc)
+                duration_cap = self._scaling_for_duration(positions, names, secs)
+                if duration_cap is not None:
+                    asked = scaling.get("vel")
+                    capped = (duration_cap if asked is None
+                              else min(asked, duration_cap))
+                    if asked is None or capped < asked - 1e-12:
+                        self.get_logger().info(
+                            "joint move held to %.1f s: velocity scaling %s -> "
+                            "%g. A planned joint move is otherwise bounded only "
+                            "by its scaling, which says nothing about the tool."
+                            % (secs,
+                               "unset" if asked is None else ("%g" % asked),
+                               capped))
+                    scaling["vel"] = capped
                 result = self.JointMove(positions, joint_names=names,
                                         goal_timeout=goal_timeout,
                                         result_timeout=result_timeout,
