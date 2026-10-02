@@ -349,6 +349,50 @@ class client(object):
             time.sleep(0.01)
         return future.result()
     
+def check_scalings(vel, acc, where):
+    """Refuse a velocity or acceleration scaling MoveIt would read as FULL SPEED.
+
+    Raises ValueError. Nothing is sent, so nothing moves.
+
+    moveit_core's verifyScalingFactor accepts only (0, 1]. Handed anything else
+    -- negative, above one, NaN, None, and critically **0.0** -- it logs one
+    WARN and substitutes **1.0**. A scaling that is zero or missing because a
+    caller left a field unset, or because a lookup like `vel=table.get(name)`
+    missed, is therefore not a refused move and not a slow one: it is a move at
+    100% of every joint limit, next to the part.
+
+    The scan classes in this cell run between 0.0025 and 0.02, so a mistake of
+    this shape is three orders of magnitude the wrong way, and the arm has
+    2.09-3.14 rad/s of joint speed to spend on the difference. mtc_node refuses
+    the same goal server-side (tari_guard::checkScalings); this is the near side
+    of the same fence, and it reports WHICH call was wrong, which a goal
+    rejection at the server cannot.
+
+    No lower bound. 0.00254 is a real, correct, measured scaling for a 6 mm/s
+    contact pass, and a floor anywhere above zero would refuse the work this
+    cell exists to do. Low scalings are MoveIt's numerical problem -- handled by
+    the planner's TOTG retry ladder -- not a validity problem.
+    """
+    bad = []
+    for name, value in (("vel", vel), ("acc", acc)):
+        if value is None:
+            bad.append("%s=None" % name)
+            continue
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            bad.append("%s=%r (not a number)" % (name, value))
+            continue
+        if not math.isfinite(v) or not (0.0 < v <= 1.0):
+            bad.append("%s=%r" % (name, value))
+    if bad:
+        raise ValueError(
+            "%s: scaling outside (0, 1]: %s. MoveIt would substitute 1.0 "
+            "(FULL SPEED) and only warn, so this is refused here instead. "
+            "These are fractions of the joint limits, not speeds."
+            % (where, ", ".join(bad)))
+
+
 class Colors:
     RESET = "\033[0m"
     COLOR_26 = "\033[26m"
@@ -771,6 +815,8 @@ class motion(Node, metaclass=dgpy_Module):
         The result carries `.result.fraction`, so the caller can report exactly
         what it got either way.
         """
+        check_scalings(vel, acc, "CartesianMove")
+
         goal_msg = RasterScan.Goal()
 
         goal_msg.velocity = vel
@@ -837,6 +883,8 @@ class motion(Node, metaclass=dgpy_Module):
             goal_msg, goal_timeout=goal_timeout, result_timeout=result_timeout)
 
     def FreeMove(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end", goal_timeout=15.0, result_timeout=120.0):
+
+        check_scalings(vel, acc, "FreeMove")
 
         goal_msg = PipelineMove.Goal()
 
@@ -934,6 +982,8 @@ class motion(Node, metaclass=dgpy_Module):
         allow_contact_links / allow_contact_objects excuse expected contact; see
         MoveJoints() and JointMove.action. Leave them alone for standoff work.
         """
+        check_scalings(vel, acc, "JointMove")
+
         goal_msg = JointMove.Goal()
         goal_msg.velocity = vel
         goal_msg.acceleration = acc
@@ -1773,6 +1823,8 @@ class motion(Node, metaclass=dgpy_Module):
         return q_start
 
     def Move(self, msg, vel=0.1, acc=0.1, ik_frame="probe_end"):
+
+        check_scalings(vel, acc, "Move")
 
         goal_msg = DgPython.Goal()
         
