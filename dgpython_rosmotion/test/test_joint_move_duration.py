@@ -37,34 +37,52 @@ class _FakeState(object):
         self.position = list(positions)
 
 
+class _Logger(object):
+    """Collects what the function warned about, so the tests can assert on it."""
+
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, message):
+        self.warnings.append(message)
+
+
 class _Node(object):
-    """The two attributes _scaling_for_duration actually touches."""
+    """Only what _scaling_for_duration actually touches."""
     JOINT_VMAX_CEILING = None       # filled from the source, not duplicated here
+    JOINT_SCALING_FLOOR = None
 
     def __init__(self, state):
         self._joint_state = state
+        self.log = _Logger()
+
+    def get_logger(self):
+        return self.log
 
 
 def _scaling_for_duration():
     """Lift _scaling_for_duration and JOINT_VMAX_CEILING out of motion.py."""
     tree = ast.parse(open(MOTION_PY).read(), filename="motion.py")
     fn = None
-    ceiling = None
+    consts = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_scaling_for_duration":
             fn = node
         if isinstance(node, ast.Assign):
             for t in node.targets:
-                if isinstance(t, ast.Name) and t.id == "JOINT_VMAX_CEILING":
-                    ceiling = ast.literal_eval(node.value)
+                if isinstance(t, ast.Name) and t.id in ("JOINT_VMAX_CEILING",
+                                                        "JOINT_SCALING_FLOOR"):
+                    consts[t.id] = ast.literal_eval(node.value)
     assert fn is not None, "_scaling_for_duration is gone from motion.py"
-    assert ceiling is not None, "JOINT_VMAX_CEILING is gone from motion.py"
+    for name in ("JOINT_VMAX_CEILING", "JOINT_SCALING_FLOOR"):
+        assert name in consts, "%s is gone from motion.py" % name
     mod = ast.Module(body=[fn], type_ignores=[])
     ns = {}
     exec(compile(ast.fix_missing_locations(mod), "motion.py", "exec"), ns)
-    _Node.JOINT_VMAX_CEILING = ceiling
+    _Node.JOINT_VMAX_CEILING = consts["JOINT_VMAX_CEILING"]
+    _Node.JOINT_SCALING_FLOOR = consts["JOINT_SCALING_FLOOR"]
     _Node._scaling_for_duration = ns["_scaling_for_duration"]
-    return ceiling
+    return consts["JOINT_VMAX_CEILING"]
 
 
 JOINTS = ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -115,10 +133,16 @@ def test_it_errs_slow_rather_than_fast():
     instead of per-joint values: getting it wrong in this direction would make
     a duration bound into a duration floor.
     """
+    floor = _Node.JOINT_SCALING_FLOOR
     for dq in (0.1, 0.5, 1.0, 2.5):
         for secs in (4.0, 10.0, 43.8, 120.0):
             s = _call([0.0]*6, [dq, 0, 0, 0, 0, 0], secs)
             if s is None or s >= 1.0:
+                continue
+            if s == floor:
+                # The floor binds, so the move comes out FASTER than asked --
+                # the one case where this cannot keep its promise, and it is
+                # required to warn instead of returning quietly.
                 continue
             for vmax in (2.0944, 3.1416):      # every real UR joint limit
                 implied = dq / (s * vmax)
@@ -145,8 +169,52 @@ def test_it_declines_rather_than_guesses_when_it_cannot_measure():
 
 
 def test_a_short_move_is_not_driven_below_the_floor():
-    """Clamped into (0, 1]: a huge duration must not return 0 and stall."""
-    s = _call([0.0]*6, [1e-6, 0, 0, 0, 0, 0], 100000.0)
-    assert s is not None and s > 0.0
+    """THE REGRESSION THIS FLOOR EXISTS FOR, as it happened on the arm.
+
+    A six-second floor on an inter-pass index move of a few thousandths of a
+    radian derived scaling 0.000133 -- a standstill, and far below where MoveIt
+    can parameterize a trajectory at all. It fired 126 times in one session,
+    107 of them more than 10x slower than the cell's own 0.015.
+
+    The floor stops that, AND the function must say it could not honour the
+    duration: the move then comes out faster than asked, and a silent number
+    that does not mean what it says is how this shipped in the first place.
+    """
+    _scaling_for_duration()
+    floor = _Node.JOINT_SCALING_FLOOR
+    n = _node([0.0]*6)
+    # 0.0047 rad over 6 s: the measured case, scaling 0.000247 before the floor.
+    s = n._scaling_for_duration([0.0047, 0, 0, 0, 0, 0], list(JOINTS), 6.0)
+    assert s == floor, "derived %r, which is below the floor" % (s,)
+    assert n.log.warnings, "the floor bound and nothing said so"
+    assert "FASTER" in n.log.warnings[0], \
+        "the warning does not say the duration was not honoured"
+    assert s >= 0.002, "a scaling this small cannot be parameterized by MoveIt"
+
+    # The clamp still holds at the other end.
     s = _call([0.0]*6, [6.0, 0, 0, 0, 0, 0], 0.001)
     assert s is not None and s <= 1.0
+
+
+def test_secs_alone_no_longer_binds_only_min_duration_s_does():
+    """`secs` is a DEFAULT on most paths, so honouring it was the regression.
+
+    ApproachInConfiguration carries secs=6.0 and every raster-row approach goes
+    through it. This pins that the planned route reads min_duration_s and
+    nothing else, so that default cannot slow a move again.
+    """
+    tree = ast.parse(open(MOTION_PY, encoding="utf-8").read())
+    fn = [n for n in ast.walk(tree)
+          if isinstance(n, ast.FunctionDef) and n.name == "MoveJoints"]
+    assert len(fn) == 1
+    assert "min_duration_s" in [a.arg for a in fn[0].args.args], \
+        "MoveJoints lost min_duration_s"
+
+    calls = [n for n in ast.walk(fn[0])
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "_scaling_for_duration"]
+    assert len(calls) == 1, "expected exactly one derivation call"
+    passed = {a.id for a in calls[0].args if isinstance(a, ast.Name)}
+    assert "min_duration_s" in passed, "the derivation is not fed min_duration_s"
+    assert "secs" not in passed, \
+        "secs feeds the derivation again -- that is the regression"

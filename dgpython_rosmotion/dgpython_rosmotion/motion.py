@@ -1450,6 +1450,16 @@ class motion(Node, metaclass=dgpy_Module):
     #: number only has to be an upper bound to be safe.
     JOINT_VMAX_CEILING = 3.15      # UR wrists are pi rad/s; base/shoulder/elbow 2.09
 
+    #: Smallest velocity scaling a derived duration may ask for.
+    #:
+    #: MoveIt's TOTG is measured unreliable around 0.005 and fails outright
+    #: below it, so a scaling under this produces a trajectory that is wrong or
+    #: absent rather than slow. 0.002 sits below the only legitimate derived
+    #: value measured on the arm (0.00433, the gauge's 437.8 mm descent at
+    #: 10 mm/s) and well above the band that a mistaken duration floor produced
+    #: (0.000133 to 0.000247).
+    JOINT_SCALING_FLOOR = 0.002
+
     def _scaling_for_duration(self, positions, joint_names, secs):
         """Velocity scaling that makes this joint move take about `secs`.
 
@@ -1480,15 +1490,35 @@ class motion(Node, metaclass=dgpy_Module):
         if worst <= 0.0:
             return None              # nothing to travel; leave the scaling be
         scaling = worst / (self.JOINT_VMAX_CEILING * secs)
-        # A scaling above 1 would be asking for more than the arm has; below a
-        # floor it stops being a speed and starts being a stall.
-        return min(max(scaling, 1e-4), 1.0)
+        if scaling > 1.0:
+            return 1.0          # asking for more than the arm has
+        # THE FLOOR, AND WHY IT IS NOT 1e-4. It was, and that let a six-second
+        # floor on a few-thousandths-of-a-radian index move derive 0.000133 --
+        # a standstill, and far below where MoveIt's time parameterization is
+        # sound (TOTG measured unreliable around 0.005 and failing outright
+        # below it). The one legitimate derived value measured so far is the
+        # gauge's 0.00433 for a 437.8 mm descent at 10 mm/s, so the floor sits
+        # under that and well over the pathological band.
+        #
+        # When it binds the move comes out FASTER than the duration asked for,
+        # which is the opposite of this function's promise -- so say so rather
+        # than return a number that quietly does not mean what it says.
+        if scaling < self.JOINT_SCALING_FLOOR:
+            self.get_logger().warning(
+                "a %.1f s floor on a %.4f rad joint move needs velocity scaling "
+                "%.2e, below the %.4f floor where MoveIt can still parameterize "
+                "a trajectory. Using the floor, so this move will be FASTER than "
+                "the %.1f s asked for. The duration is probably the wrong bound "
+                "for a move this short."
+                % (secs, worst, scaling, self.JOINT_SCALING_FLOOR, secs))
+            return self.JOINT_SCALING_FLOOR
+        return scaling
 
     def MoveJoints(self, positions, secs=5.0, joint_names=None,
                    goal_timeout=15.0, result_timeout=120.0,
                    plan=True, validate=True,
                    allow_contact_links=None, allow_contact_objects=None,
-                   vel=None, acc=None):
+                   vel=None, acc=None, min_duration_s=None):
         """Drive the arm to an explicit joint configuration.
 
         The configuration is the point. A pose goal lets the planner pick
@@ -1523,27 +1553,34 @@ class motion(Node, metaclass=dgpy_Module):
         (ROS-Scanning's dry run reports the peak) before trusting a number near
         people or parts.
 
-        `secs` IS HONOURED ON BOTH ROUTES. It used to be read only by the direct
-        fallback, and that silently defeated the one bound a caller had on a
-        planned joint move's speed. The gauge approach in azure_gauge.dpi asks
-        for a duration precisely so that "the duration asked for cannot itself
-        be the thing that exceeds the limit", computed from the straight-line
-        distance at the near-the-part class limit of 10 mm/s -- and then got
-        JOINT_MOVE_SCALING's 0.015 instead, which measured 31.6 mm/s at the tool
-        over a 437.8 mm descent, 92% of wrist 1's scaled limit and three times
-        the class limit it had just computed for itself.
+        `secs` IS NOT A SPEED BOUND, and making it one was a mistake worth
+        recording. It is honoured by the direct fallback and ignored by the
+        planned route, and for one revision the planned route derived a velocity
+        scaling from it as well -- which looked like the fix for a real hazard
+        (a gauge approach that ran 437.8 mm at 31.6 mm/s against the 10 mm/s
+        limit it had just computed for itself, because its fallback got
+        JOINT_MOVE_SCALING instead).
 
-        Unlike the Cartesian case, this conversion is sound: a joint-space
-        scaling bounds joint velocity directly, so the duration a scaling
-        implies is max_j(|dq_j| / (scaling * vmax_j)) with no Jacobian in it.
-        Inverting that for the scaling needs the joint limits, and the largest
-        one on the arm is used for every joint deliberately -- it makes the
-        scaling SMALLER than strictly required, so the move comes out at or
-        slower than `secs` rather than faster.
+        It was the wrong lever. `secs` is a DEFAULT on most paths, not a
+        decision: ApproachInConfiguration carries secs=6.0, and every raster-row
+        approach goes through it. Honouring it turned that default into a
+        mandated six-second crawl for moves that need a fraction of a second.
+        Measured on the arm: it fired 126 times in one session and 107 of those
+        came out more than 10x slower than JOINT_MOVE_SCALING, median scaling
+        0.000247 against 0.015 -- a 60x slowdown on every inter-pass index move,
+        because a 0.3 mm line step is a few thousandths of a radian and six
+        seconds of it is a standstill.
 
-        The result is a ceiling, never a floor: the scaling actually used is the
-        smaller of what the caller asked for and what the duration allows, so
-        passing `secs` can only slow a move down.
+        So the bound is opt-in. `min_duration_s` is the floor a caller means,
+        passed only where one was actually computed, and only it derives a
+        scaling. The conversion itself is sound and unchanged: a joint-space
+        scaling bounds joint velocity directly, so the duration it implies is
+        max_j(|dq_j| / (scaling * vmax_j)) with no Jacobian in it, and inverting
+        it with a single upper-bound vmax errs slow.
+
+        The result is a ceiling, never a floor: the scaling used is the smaller
+        of what the caller asked for and what the duration allows, so
+        min_duration_s can only slow a move down.
         """
         names = list(joint_names or self.UR_JOINTS)
         positions = [float(v) for v in positions]
@@ -1555,7 +1592,10 @@ class motion(Node, metaclass=dgpy_Module):
                     scaling["vel"] = float(vel)
                 if acc is not None:
                     scaling["acc"] = float(acc)
-                duration_cap = self._scaling_for_duration(positions, names, secs)
+                duration_cap = None
+                if min_duration_s is not None:
+                    duration_cap = self._scaling_for_duration(
+                        positions, names, min_duration_s)
                 if duration_cap is not None:
                     asked = scaling.get("vel")
                     capped = (duration_cap if asked is None
@@ -1565,7 +1605,7 @@ class motion(Node, metaclass=dgpy_Module):
                             "joint move held to %.1f s: velocity scaling %s -> "
                             "%g. A planned joint move is otherwise bounded only "
                             "by its scaling, which says nothing about the tool."
-                            % (secs,
+                            % (min_duration_s,
                                "unset" if asked is None else ("%g" % asked),
                                capped))
                     scaling["vel"] = capped
