@@ -1230,10 +1230,14 @@ class motion(Node, metaclass=dgpy_Module):
             if res is not None and res.results:
                 reason = res.results[0].reason
             raise RuntimeError(
-                "move_group refused the IK mode change: %s. If move_group is "
-                "running the stock KDL solver rather than pick_ik there is no "
-                "such parameter -- check that ur_moveit.launch.py is loading "
-                "tari_ur_description/config/kinematics.yaml." % (reason or "no reason given",))
+                "move_group refused the IK mode change: %s. `mode` is a pick_ik "
+                "parameter, so there is no such parameter at all if move_group "
+                "came up on another solver -- check that the ur_moveit.launch.py "
+                "in use is tari_ur_description's, which loads that package's "
+                "config/kinematics.yaml. The one in tari_ur_soft_launch defaults "
+                "moveit_config_package to ur_moveit_config and would give "
+                "move_group the stock KDL solver instead."
+                % (reason or "no reason given",))
         return previous
 
     # ------------------------------------------------------------------
