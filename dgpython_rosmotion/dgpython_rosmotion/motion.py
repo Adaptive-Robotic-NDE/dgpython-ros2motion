@@ -437,7 +437,7 @@ class motion(Node, metaclass=dgpy_Module):
         # Opt-in. Only EddyCurrentScan.dgp and ClientScannerTest.dgp read
         # ros.depth_image, and a standing subscription drags every frame through
         # rclpy in the acquisition process -- 6 MB at 30 Hz for the registered
-        # depth a real Azure publishes. Those configs pass the cell manifest's
+        # depth a real Azure publishes. Those configs pass the site manifest's
         # topics; anything else gets no subscription at all.
         if depth_image_topic:
             self.depth_sub = self.create_subscription(Image, depth_image_topic, self.depth_image_callback, 10)
@@ -1023,7 +1023,7 @@ class motion(Node, metaclass=dgpy_Module):
     #:
     #: None, the default, is no constraint at all: the arm genuinely has +/-360
     #: degrees there and plenty of work needs it, so the limit is a property of
-    #: what is bolted on and how it is cabled and belongs to the cell config,
+    #: what is bolted on and how it is cabled and belongs to the site config,
     #: not to this module and not to joint_limits.yaml. A config sets it once
     #: (ros.WRIST3_BAND = (lo, hi)) and ApproachInConfiguration() then refuses
     #: to enter a pass that would run the cables outside it.

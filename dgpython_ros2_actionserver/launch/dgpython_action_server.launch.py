@@ -135,7 +135,7 @@ def _cell_env(cell_package):
     shared = get_package_share_directory("tari_ur_description")
     urdf = os.path.join(shared, "urdf", "environments", "bare", "environment.urdf.xacro")
     srdf = os.path.join(shared, "srdf", "environments", "bare", "environment.srdf.xacro")
-    # The arm's own measured geometry. None means the cell does not ship one
+    # The arm's own measured geometry. None means the site does not ship one
     # and the caller should fall back to UR nominal values.
     calib = None
     cell = (cell_package or "").strip()
@@ -166,16 +166,16 @@ def get_robot_description():
     joint_limit_params = PathJoinSubstitution(
         [FindPackageShare("ur_description"), "config", ur_type, "joint_limits.yaml"]
     )
-    # THE CELL'S MEASURED CALIBRATION, and every node in the cell has to render
+    # THE SITE'S MEASURED CALIBRATION, and every node on the robot has to render
     # with the same one. Hardcoding UR nominal values here while
-    # ur_moveit.launch.py picks the cell's etc/calibration.yaml makes move_group
+    # ur_moveit.launch.py picks the site's etc/calibration.yaml makes move_group
     # and this node describe two different arms: move_group's FK of the current
     # joint values and the TF tree then disagree by about 1 mm at probe_end, and
     # that is exactly the error ros.Move() accumulates per call -- it commands a
     # TF-reported pose that move_group's model cannot reach, lands a millimetre
     # away, and the next command is taken from there.
     #
-    # Falls back to UR nominal only when the cell ships no calibration.
+    # Falls back to UR nominal only when the site ships no calibration.
     kinematics_params = _CELL_CALIBRATION or PathJoinSubstitution(
         [FindPackageShare("ur_description"), "config", ur_type, "default_kinematics.yaml"]
     )
