@@ -1,0 +1,162 @@
+keyence_reconstruction_group = "Keyence Reconstruction Parameters"
+
+# General Parameters
+
+paramdb.AddParam(Parameter,
+                "output_directory",
+                friendlyname="Output Filepath",
+                doc="Directory path and name for the output files. A timestamp will be added.",
+                group=keyence_reconstruction_group,
+                value="/data/tari_scan_data/Cylinder/Front Face")
+
+paramdb.AddParam(Parameter,
+                "base_filename",
+                friendlyname="Base Filepath",
+                doc="Base path and name for the output files. A timestamp will be added.",
+                group=keyence_reconstruction_group,
+                value="reconstructed_mesh")
+
+# Merging Parameters
+paramdb.AddParam(Parameter,
+                "perform_merge",
+                friendlyname="Perform Merge",
+                doc="Set to true to merge points that are very close together.",
+                group=keyence_reconstruction_group,
+                value=True)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "merge_distance_m",
+                friendlyname="Merge Distance",
+                doc="The absolute distance in meters for merging close points.",
+                group=keyence_reconstruction_group,
+                units="m",
+                value=0.0005)
+
+# Cropping Parameters
+paramdb.AddParam(Parameter,
+                "perform_cropping",
+                friendlyname="Perform Cropping",
+                doc="Set to true to enable cropping of the point cloud.",
+                group=keyence_reconstruction_group,
+                value=True)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_min_x",
+                friendlyname="Crop Min X",
+                doc="Minimum X value for cropping.",
+                group=keyence_reconstruction_group,
+                units="m",
+                value=0.805217)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_max_x",
+                friendlyname="Crop Max X",
+                doc="Maximum X value for cropping.",
+                group=keyence_reconstruction_group,
+                units="m",
+                value=0.815209)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_min_y",
+                friendlyname="Crop Min Y",
+                doc="Minimum Y value for cropping.",
+                group=keyence_reconstruction_group,
+                units="m",
+                value=-0.0387449)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_max_y",
+                friendlyname="Crop Max Y",
+                doc="Maximum Y value for cropping.",
+                group=keyence_reconstruction_group,
+                units="m",
+                value=-0.028780)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_min_z",
+                friendlyname="Crop Min Z",
+                doc="Minimum Z value for cropping.",
+                group=keyence_reconstruction_group,
+                units="m",
+                value=0.965)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "crop_max_z",
+                friendlyname="Crop Max Z",
+                doc="Maximum Z value for cropping.",
+                group=keyence_reconstruction_group,
+                units="m",
+                value=1.10)
+
+# Filtering Parameters
+paramdb.AddParam(NumericUnitsParameter,
+                "coarse_voxel_divisor",
+                friendlyname="Coarse Voxel Divisor",
+                doc="Divisor for the cloud's longest side to determine voxel size for merging overlaps.",
+                group=keyence_reconstruction_group,
+                units="",
+                value=200.0)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "dbscan_eps_multiplier",
+                friendlyname="DBSCAN Epsilon Multiplier",
+                doc="Multiplier for voxel size to set the DBSCAN search radius (eps).",
+                group=keyence_reconstruction_group,
+                units="",
+                value=4.0)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "dbscan_min_points",
+                friendlyname="DBSCAN Min Points",
+                doc="Minimum number of points to form a cluster in DBSCAN.",
+                group=keyence_reconstruction_group,
+                units="",
+                value=50)
+
+paramdb.AddParam(Parameter,
+                "perform_sor_filter",
+                friendlyname="Perform SOR Filter",
+                doc="Set to true to enable Statistical Outlier Removal.",
+                group=keyence_reconstruction_group,
+                value=False)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "sor_nb_neighbors",
+                friendlyname="SOR Neighbors",
+                doc="Number of neighbors to analyze for Statistical Outlier Removal.",
+                group=keyence_reconstruction_group,
+                units="",
+                value=40)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "sor_std_ratio",
+                friendlyname="SOR Std Ratio",
+                doc="Standard deviation ratio for the SOR threshold.",
+                group=keyence_reconstruction_group,
+                units="",
+                value=2.0)
+
+# Downsampling Parameters
+paramdb.AddParam(Parameter,
+                "perform_uniform_downsampling",
+                friendlyname="Perform Uniform Downsampling",
+                doc="Set to true to enable farthest point downsampling.",
+                group=keyence_reconstruction_group,
+                value=False)
+
+paramdb.AddParam(NumericUnitsParameter,
+                "target_downsample_points",
+                friendlyname="Target Downsample Points",
+                doc="The target number of points after uniform downsampling.",
+                group=keyence_reconstruction_group,
+                units="",
+                value=40000)
+
+# Meshing Parameters
+paramdb.AddParam(NumericUnitsParameter,
+                "ball_pivot_radii",
+                friendlyname="Ball Pivot Radii",
+                doc="List of radii in meters for the Ball Pivoting Algorithm.",
+                group=keyence_reconstruction_group,
+                units="",
+                value=(0.001, 0.002, 0.003, 0.004))

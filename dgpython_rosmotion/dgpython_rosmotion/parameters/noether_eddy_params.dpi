@@ -1,0 +1,73 @@
+    ###NOETHER EDDY CURRENT PARAMETERS###
+
+eddy_prefix = "eddy_"
+eddy_group = "Eddy Current Noether Parameters"
+
+paramdb.AddParam(Parameter,
+                eddy_prefix+"input_file",
+                friendlyname="Input File",
+                doc="Input mesh filepath for Nother Tool Path Planning",
+                group=eddy_group,
+                value="/home/labuser/iron_tari/noether_non_tri_test.ply")
+paramdb.AddParam(NumericUnitsParameter,
+                eddy_prefix+"line_spacing",
+                friendlyname="Line Spacing",
+                doc="Spacing between line of poses",
+                group=eddy_group,
+                units="m",
+                value=0.001)
+paramdb.AddParam(NumericUnitsParameter,
+                eddy_prefix+"point_spacing",
+                friendlyname="Point Spacing",
+                doc="Spacing between individual poses",
+                group=eddy_group,
+                units="m",
+                value=0.001)
+paramdb.AddParam(NumericUnitsParameter,
+                eddy_prefix+"z_offset",
+                friendlyname="Z Offset",
+                doc="",
+                group=eddy_group,
+                units="m",
+                value=0.0)
+paramdb.AddParam(NumericUnitsParameter,
+                eddy_prefix+"distance_threshold",
+                friendlyname="Distance Threshold",
+                doc="",
+                group=eddy_group,
+                units="m",
+                value=0.1)
+paramdb.AddParam(Parameter,
+                eddy_prefix+"snake",
+                friendlyname="Snake Plan Modifier",
+                doc="",
+                group=eddy_group,
+                value=False)
+paramdb.AddParam(NumericUnitsParameter,
+                eddy_prefix+"orientation",
+                friendlyname="Orientation",
+                doc="",
+                group=eddy_group,
+                units="deg",
+                value=(1.0,0.0,0.0))
+paramdb.AddParam(NumericUnitsParameter,
+                eddy_prefix+"origin",
+                friendlyname="Origin Generator",
+                doc="",
+                group=eddy_group,
+                units="deg",
+                value=(1,0,0))
+paramdb.AddParam(NumericUnitsParameter,
+                eddy_prefix+"direction",
+                friendlyname="Direction Generator",
+                doc="",
+                group=eddy_group,
+                units="deg",
+                value=(1,0,0))
+paramdb.AddParam(NumericUnitsParameter,
+                eddy_prefix+"rotation_offset",
+                friendlyname="Rotation Offset",
+                doc="",
+                group=eddy_group,
+                units="deg",
+                value=0.0)

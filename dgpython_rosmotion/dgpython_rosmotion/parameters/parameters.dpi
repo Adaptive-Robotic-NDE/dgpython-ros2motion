@@ -1,0 +1,20 @@
+import dgpython_param_manager as param
+import math
+
+include(param, "paramdb.dpi")
+
+window_size = [800,1200]
+
+paramdb.ShowViewer()
+paramdb.ResizeViewer(window_size)
+
+include(rosm, "parameters/keyence_params.dpi")
+include(rosm, "parameters/noether_keyence_params.dpi")
+include(rosm, "parameters/noether_eddy_params.dpi")
+include(rosm, "parameters/mesh_filter_params.dpi")
+include(rosm, "parameters/reconstruct_mesh.dpi")
+# include(rosm, "parameters/mesh_segmentor_params.dpi")
+include(rosm, "parameters/start_reconstruction_params.dpi")
+include(rosm, "parameters/stop_reconstruction_params.dpi")
+include(rosm, "parameters/x3d_convertor_params.dpi")
+

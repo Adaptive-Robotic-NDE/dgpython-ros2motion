@@ -1,0 +1,65 @@
+    ###NOETHER TPP###
+
+keyence_prefix = "keyence_"
+keyence_group = "Keyence Noether Parameters"
+
+paramdb.AddParam(Parameter,
+                keyence_prefix+"input_file",
+                friendlyname="Input File",
+                doc="Input mesh filepath for Nother Tool Path Planning",
+                group=keyence_group,
+                value="/home/labuser/untitled.ply")
+paramdb.AddParam(NumericUnitsParameter,
+                keyence_prefix+"line_spacing",
+                friendlyname="Line Spacing",
+                doc="Spacing between line of poses",
+                group=keyence_group,
+                units="m",
+                value=0.032)
+paramdb.AddParam(NumericUnitsParameter,
+                keyence_prefix+"z_offset",
+                friendlyname="Z Offset",
+                doc="",
+                group=keyence_group,
+                units="m",
+                value=-0.08)
+paramdb.AddParam(NumericUnitsParameter,
+                keyence_prefix+"distance_threshold",
+                friendlyname="Distance Threshold",
+                doc="",
+                group=keyence_group,
+                units="m",
+                value=0.1)
+paramdb.AddParam(Parameter,
+                keyence_prefix+"snake",
+                friendlyname="Snake Plan Modifier",
+                doc="",
+                group=keyence_group,
+                value=True)
+paramdb.AddParam(Parameter,
+                "set_orientation",
+                friendlyname="Set Orientation",
+                doc="",
+                group=keyence_group,
+                value=True)
+paramdb.AddParam(NumericUnitsParameter,
+                keyence_prefix+"orientation",
+                friendlyname="Orientation",
+                doc="",
+                group=keyence_group,
+                units="deg",
+                value=(0.0,0.0,0.0,1.0))
+paramdb.AddParam(NumericUnitsParameter,
+                keyence_prefix+"origin",
+                friendlyname="Origin Generator",
+                doc="",
+                group=keyence_group,
+                units="deg",
+                value=(1,0,0))
+paramdb.AddParam(NumericUnitsParameter,
+                keyence_prefix+"direction",
+                friendlyname="Direction Generator",
+                doc="",
+                group=keyence_group,
+                units="deg",
+                value=(1,0,0))

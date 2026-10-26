@@ -1,0 +1,8 @@
+string task_type        # "move_to_state", "pick", etc.
+string group_name
+string target_state
+geometry_msgs/PoseStamped target_pose
+---
+bool success
+---
+string feedback
